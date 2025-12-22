@@ -11,6 +11,8 @@
   "dependencies": {
     "@dagrejs/dagre": "^1.1.8",
     "@google/genai": "^1.34.0",
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.89.0",
     "@tailwindcss/typography": "^0.5.19",
     "@xyflow/react": "^12.10.0",
     "katex": "^0.16.27",

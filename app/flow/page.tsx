@@ -17,29 +17,29 @@ import "@xyflow/react/dist/style.css";
 import { nodeTypes } from "./components/Nodes";
 import { edgeTypes } from "./components/Edges";
 import { InputBar } from "./components/InputBar";
+import { ConversationSidebar } from "./components/ConversationSidebar";
 import { getLayoutedElements, getZoomPosition } from "./dagre-layout";
 import {
-  type ChatMessage,
   type FlowNodeData,
   type FlowEdgeData,
-  createId,
   generateShortLabels,
-  aggregateContext,
   isLastInBranch,
-  deleteSubtree,
   wouldCreateCircle,
   generateTreeSummary,
   TREE_PALETTES,
   AGENT_PALETTE,
 } from "./types";
+import { useConversation, useConversations } from "@/hooks/useConversation";
+import { useAuth } from "@/hooks/useAuth";
+import type { Message } from "@/lib/database.types";
 
 // Model provider type
-type ModelProvider = 'gemini' | 'ollama';
+type ModelProvider = "gemini" | "ollama";
 
 // Available models configuration
 const MODEL_OPTIONS: Record<ModelProvider, string[]> = {
-  gemini: ['gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro'],
-  ollama: ['gemma3:270m', 'mario'],
+  gemini: ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-pro"],
+  ollama: ["gemma3:270m", "mario"],
 };
 
 // LLM API call with streaming
@@ -98,19 +98,68 @@ async function callLLM(
   return fullText;
 }
 
+// Convert database Message to display format with streaming support
+type DisplayMessage = Message & {
+  isStreaming?: boolean;
+  isCollapsed?: boolean;
+  branchReferences: string[]; // For UI compatibility
+};
+
 function FlowCanvas() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { user, signOut } = useAuth();
+  const {
+    conversations,
+    createConversation,
+    deleteConversation,
+    renameConversation,
+  } = useConversations();
+
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [showSidebar, setShowSidebar] = useState(true);
+
+  const {
+    conversation,
+    messages: dbMessages,
+    references,
+    isLoading: isLoadingConversation,
+    addMessage,
+    updateMessage,
+    deleteMessage,
+  } = useConversation(currentConversationId);
+
+  // Local streaming state (for messages being streamed)
+  const [streamingMessages, setStreamingMessages] = useState<Map<string, { content: string; isStreaming: boolean }>>(new Map());
+  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<FlowNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge<FlowEdgeData>>([]);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [circularWarning, setCircularWarning] = useState<string | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState<ModelProvider>('gemini');
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash-lite');
+  const [selectedProvider, setSelectedProvider] = useState<ModelProvider>("gemini");
+  const [selectedModel, setSelectedModel] = useState<string>("gemini-2.5-flash-lite");
   const { setCenter } = useReactFlow();
   const lastNodeIdRef = useRef<string | null>(null);
   const hasInitialLayoutRef = useRef(false);
   const prevMessageCountRef = useRef(0);
+
+  // Merge database messages with streaming state
+  const messages: DisplayMessage[] = useMemo(() => {
+    return dbMessages.map((msg) => {
+      const streaming = streamingMessages.get(msg.id);
+      const branchRefs = references
+        .filter((r) => r.source_message_id === msg.id)
+        .map((r) => r.target_message_id);
+
+      return {
+        ...msg,
+        content: streaming?.content ?? msg.content,
+        isStreaming: streaming?.isStreaming ?? false,
+        isCollapsed: collapsedNodes.has(msg.id),
+        branchReferences: branchRefs,
+      };
+    });
+  }, [dbMessages, streamingMessages, collapsedNodes, references]);
 
   // Generate short labels and tree info for all messages
   const { labels: shortLabels, treeLabels, treeIndices } = useMemo(
@@ -120,23 +169,33 @@ function FlowCanvas() {
 
   // Build messages map
   const messagesById = useMemo(() => {
-    const map = new Map<string, ChatMessage>();
+    const map = new Map<string, DisplayMessage>();
     for (const m of messages) map.set(m.id, m);
     return map;
   }, [messages]);
 
   // Handle toggle collapse
   const handleToggleCollapse = useCallback((nodeId: string) => {
-    setMessages((prev) =>
-      prev.map((m) =>
-        m.id === nodeId ? { ...m, isCollapsed: !m.isCollapsed } : m
-      )
-    );
+    setCollapsedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
+      }
+      return next;
+    });
   }, []);
 
   // Convert messages to ReactFlow nodes and edges
-  // Only re-layout when messages are added/removed, not when collapse state changes
   useEffect(() => {
+    if (!currentConversationId) {
+      setNodes([]);
+      setEdges([]);
+      hasInitialLayoutRef.current = false;
+      return;
+    }
+
     const messageCountChanged = messages.length !== prevMessageCountRef.current;
     const needsLayout = messageCountChanged || !hasInitialLayoutRef.current;
     prevMessageCountRef.current = messages.length;
@@ -144,19 +203,28 @@ function FlowCanvas() {
     const newNodes: Node<FlowNodeData>[] = messages.map((msg) => {
       const treeLabel = treeLabels.get(msg.id) ?? "?";
       const treeIndex = treeIndices.get(msg.id) ?? 0;
-      // Agent nodes always gray, User nodes get tree palette
-      const palette = msg.role === "assistant"
-        ? AGENT_PALETTE
-        : TREE_PALETTES[treeIndex % TREE_PALETTES.length];
-      const isRoot = !msg.parentId;
+      const palette =
+        msg.role === "assistant"
+          ? AGENT_PALETTE
+          : TREE_PALETTES[treeIndex % TREE_PALETTES.length];
+      const isRoot = !msg.parent_id;
       const treeSummary = isRoot ? generateTreeSummary(messages, msg.id) : undefined;
 
       return {
         id: msg.id,
         type: msg.role === "user" ? "user" : "agent",
-        position: { x: 0, y: 0 }, // Will be layouted only if needed
+        position: { x: 0, y: 0 },
         data: {
-          message: msg,
+          message: {
+            id: msg.id,
+            parentId: msg.parent_id,
+            role: msg.role,
+            content: msg.content,
+            createdAt: new Date(msg.created_at).getTime(),
+            branchReferences: msg.branchReferences,
+            isStreaming: msg.isStreaming,
+            isCollapsed: msg.isCollapsed,
+          },
           shortLabel: shortLabels.get(msg.id) ?? "?",
           treeLabel,
           treeIndex,
@@ -181,10 +249,10 @@ function FlowCanvas() {
 
     // Add reply edges (parent-child connections)
     for (const msg of messages) {
-      if (msg.parentId) {
+      if (msg.parent_id) {
         newEdges.push({
-          id: `reply-${msg.parentId}-${msg.id}`,
-          source: msg.parentId,
+          id: `reply-${msg.parent_id}-${msg.id}`,
+          source: msg.parent_id,
           target: msg.id,
           type: "reply",
           data: { edgeType: "reply" },
@@ -192,21 +260,18 @@ function FlowCanvas() {
       }
     }
 
-    // Add reference edges (branch references - connect to root nodes)
-    for (const msg of messages) {
-      for (const refRootId of msg.branchReferences) {
-        const isCircular = wouldCreateCircle(messagesById, msg.id, refRootId);
-        newEdges.push({
-          id: `ref-${msg.id}-${refRootId}`,
-          source: msg.id,
-          target: refRootId,
-          type: "reference",
-          data: { edgeType: "reference", isCircular },
-        });
-      }
+    // Add reference edges (cross-branch references)
+    for (const ref of references) {
+      const isCircular = wouldCreateCircle(messagesById, ref.source_message_id, ref.target_message_id);
+      newEdges.push({
+        id: `ref-${ref.source_message_id}-${ref.target_message_id}`,
+        source: ref.source_message_id,
+        target: ref.target_message_id,
+        type: "reference",
+        data: { edgeType: "reference", isCircular },
+      });
     }
 
-    // Apply layout only when messages are added/removed (not on collapse toggle)
     if (needsLayout) {
       const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
         newNodes,
@@ -217,7 +282,6 @@ function FlowCanvas() {
       setEdges(layoutedEdges);
       hasInitialLayoutRef.current = true;
 
-      // Zoom to last added node (only when new message added)
       if (lastNodeIdRef.current && messageCountChanged) {
         const pos = getZoomPosition(layoutedNodes, lastNodeIdRef.current);
         if (pos) {
@@ -228,7 +292,6 @@ function FlowCanvas() {
         lastNodeIdRef.current = null;
       }
     } else {
-      // Just update the node data without re-layouting (preserves positions)
       setNodes((currentNodes) =>
         currentNodes.map((node) => {
           const newNode = newNodes.find((n) => n.id === node.id);
@@ -240,31 +303,109 @@ function FlowCanvas() {
       );
       setEdges(newEdges);
     }
-  }, [messages, shortLabels, treeLabels, treeIndices, messagesById, setNodes, setEdges, setCenter, handleToggleCollapse]);
+  }, [
+    currentConversationId,
+    messages,
+    references,
+    shortLabels,
+    treeLabels,
+    treeIndices,
+    messagesById,
+    setNodes,
+    setEdges,
+    setCenter,
+    handleToggleCollapse,
+  ]);
 
   // Handle edit (delete subtree and prepare for re-entry)
   const handleEdit = useCallback(
-    (nodeId: string) => {
+    async (nodeId: string) => {
       const msg = messagesById.get(nodeId);
       if (!msg) return;
 
-      // Delete this node and all descendants
-      setMessages((prev) => deleteSubtree(prev, nodeId));
-
-      // Set up reply to parent (if any)
-      if (msg.parentId) {
-        setReplyingTo(msg.parentId);
+      try {
+        await deleteMessage(nodeId);
+        if (msg.parent_id) {
+          setReplyingTo(msg.parent_id);
+        }
+      } catch (error) {
+        console.error("Failed to delete message:", error);
       }
     },
-    [messagesById]
+    [messagesById, deleteMessage]
+  );
+
+  // Get context for LLM - aggregate ancestry and references
+  const getContextMessages = useCallback(
+    (nodeId: string, branchRefs: string[]) => {
+      const visited = new Set<string>();
+      const contextMessages: DisplayMessage[] = [];
+
+      // Get ancestry
+      const getAncestry = (id: string): DisplayMessage[] => {
+        const chain: DisplayMessage[] = [];
+        let current = messagesById.get(id);
+        while (current && !visited.has(current.id)) {
+          visited.add(current.id);
+          chain.push(current);
+          current = current.parent_id ? messagesById.get(current.parent_id) : undefined;
+        }
+        chain.reverse();
+        return chain;
+      };
+
+      // Add main ancestry
+      contextMessages.push(...getAncestry(nodeId));
+
+      // Add referenced branches (entire trees)
+      for (const refId of branchRefs) {
+        // Get root of referenced message
+        let root = messagesById.get(refId);
+        while (root?.parent_id) {
+          root = messagesById.get(root.parent_id);
+        }
+        if (root) {
+          // Get all nodes in that tree
+          const queue = [root.id];
+          while (queue.length > 0) {
+            const id = queue.shift()!;
+            if (visited.has(id)) continue;
+            visited.add(id);
+            const msg = messagesById.get(id);
+            if (msg) {
+              contextMessages.push(msg);
+              messages
+                .filter((m) => m.parent_id === id)
+                .forEach((m) => queue.push(m.id));
+            }
+          }
+        }
+      }
+
+      // Sort by creation time
+      return contextMessages.sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+    },
+    [messagesById, messages]
   );
 
   // Handle sending a message
   const handleSend = useCallback(
     async (content: string, branchReferences: string[]) => {
-      const now = Date.now();
-      const userId = createId();
-      const assistantId = createId();
+      if (!currentConversationId) {
+        // Create a new conversation first
+        try {
+          const newConv = await createConversation("New Conversation");
+          setCurrentConversationId(newConv.id);
+          // Wait for state update then retry
+          setTimeout(() => handleSend(content, branchReferences), 100);
+          return;
+        } catch (error) {
+          console.error("Failed to create conversation:", error);
+          return;
+        }
+      }
 
       // Check for circular references
       for (const refId of branchReferences) {
@@ -276,45 +417,38 @@ function FlowCanvas() {
         }
       }
 
-      // Create user message
-      const userMsg: ChatMessage = {
-        id: userId,
-        parentId: replyingTo,
-        role: "user",
-        content,
-        createdAt: now,
-        branchReferences,
-      };
-
-      // Create placeholder assistant message
-      const assistantMsg: ChatMessage = {
-        id: assistantId,
-        parentId: userId,
-        role: "assistant",
-        content: "",
-        createdAt: now + 1,
-        branchReferences: [],
-        isStreaming: true,
-      };
-
-      setMessages((prev) => [...prev, userMsg, assistantMsg]);
-      setReplyingTo(null);
       setIsLoading(true);
-      lastNodeIdRef.current = assistantId;
 
       try {
-        // Build context with all messages for branch aggregation
-        const updatedMessages = [...messages, userMsg];
-        const updatedMessagesById = new Map(messagesById);
-        updatedMessagesById.set(userId, userMsg);
+        // Create user message
+        const userMsg = await addMessage({
+          parent_id: replyingTo,
+          role: "user",
+          content,
+          branch_references: branchReferences,
+        });
 
-        const { messages: contextMessages, circularWarning: ctxWarning } =
-          aggregateContext(updatedMessages, updatedMessagesById, userId, branchReferences);
+        // Create placeholder assistant message
+        const assistantMsg = await addMessage({
+          parent_id: userMsg.id,
+          role: "assistant",
+          content: "",
+          model: selectedModel,
+          provider: selectedProvider,
+        });
 
-        if (ctxWarning) {
-          setCircularWarning(ctxWarning);
-          setTimeout(() => setCircularWarning(null), 5000);
-        }
+        setReplyingTo(null);
+        lastNodeIdRef.current = assistantMsg.id;
+
+        // Set streaming state
+        setStreamingMessages((prev) => {
+          const next = new Map(prev);
+          next.set(assistantMsg.id, { content: "", isStreaming: true });
+          return next;
+        });
+
+        // Build context
+        const contextMessages = getContextMessages(userMsg.id, branchReferences);
 
         // Call LLM
         const llmText = await callLLM(
@@ -327,115 +461,191 @@ function FlowCanvas() {
             model: selectedModel,
           },
           (streamedText: string) => {
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id === assistantId
-                  ? { ...m, content: streamedText, isStreaming: true }
-                  : m
-              )
-            );
+            setStreamingMessages((prev) => {
+              const next = new Map(prev);
+              next.set(assistantMsg.id, { content: streamedText, isStreaming: true });
+              return next;
+            });
           }
         );
 
-        // Final update
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? {
-                  ...m,
-                  content: llmText || "(empty response)",
-                  isStreaming: false,
-                }
-              : m
-          )
-        );
+        // Update the message in the database
+        await updateMessage(assistantMsg.id, llmText || "(empty response)");
+
+        // Clear streaming state
+        setStreamingMessages((prev) => {
+          const next = new Map(prev);
+          next.delete(assistantMsg.id);
+          return next;
+        });
 
         // Auto-set reply to the new assistant message
-        setReplyingTo(assistantId);
-      } catch (e) {
-        const err = e instanceof Error ? e.message : "Unknown error";
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantId
-              ? {
-                  ...m,
-                  content: `Error: ${err}`,
-                  isStreaming: false,
-                }
-              : m
-          )
-        );
+        setReplyingTo(assistantMsg.id);
+      } catch (error) {
+        const err = error instanceof Error ? error.message : "Unknown error";
+        console.error("Error sending message:", err);
+        setCircularWarning(`Error: ${err}`);
+        setTimeout(() => setCircularWarning(null), 5000);
       } finally {
         setIsLoading(false);
       }
     },
-    [replyingTo, messagesById, messages, treeLabels, selectedProvider, selectedModel]
+    [
+      currentConversationId,
+      replyingTo,
+      messagesById,
+      treeLabels,
+      selectedProvider,
+      selectedModel,
+      addMessage,
+      updateMessage,
+      getContextMessages,
+      createConversation,
+    ]
   );
 
-  return (
-    <div className="w-screen h-screen bg-white">
-      {/* Model Selector - Top Right */}
-      <div className="fixed top-4 right-4 z-50 flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
-        <select
-          value={selectedProvider}
-          onChange={(e) => {
-            const provider = e.target.value as ModelProvider;
-            setSelectedProvider(provider);
-            setSelectedModel(MODEL_OPTIONS[provider][0]);
-          }}
-          className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-700"
-        >
-          <option value="gemini">Gemini</option>
-          <option value="ollama">Ollama</option>
-        </select>
-        <span className="text-gray-300">|</span>
-        <select
-          value={selectedModel}
-          onChange={(e) => setSelectedModel(e.target.value)}
-          className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-600"
-        >
-          {MODEL_OPTIONS[selectedProvider].map((model) => (
-            <option key={model} value={model}>
-              {model}
-            </option>
-          ))}
-        </select>
-      </div>
+  // Handle creating a new conversation
+  const handleNewConversation = useCallback(async () => {
+    try {
+      const newConv = await createConversation("New Conversation");
+      setCurrentConversationId(newConv.id);
+      setReplyingTo(null);
+      hasInitialLayoutRef.current = false;
+    } catch (error) {
+      console.error("Failed to create conversation:", error);
+    }
+  }, [createConversation]);
 
-      {/* Circular warning */}
-      {circularWarning && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-red-100 border border-red-300 rounded-lg text-red-700 text-sm">
-          ⚠ {circularWarning}
-        </div>
+  return (
+    <div className="w-screen h-screen bg-white flex">
+      {/* Sidebar */}
+      {showSidebar && (
+        <ConversationSidebar
+          conversations={conversations}
+          currentId={currentConversationId}
+          onSelect={setCurrentConversationId}
+          onCreate={handleNewConversation}
+          onDelete={deleteConversation}
+          onRename={renameConversation}
+          onClose={() => setShowSidebar(false)}
+          user={user}
+          onSignOut={signOut}
+        />
       )}
 
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        fitView
-        minZoom={0.1}
-        maxZoom={2}
-        proOptions={{ hideAttribution: true }}
-        className="bg-gray-50"
-      >
-        <Background color="#e5e7eb" gap={20} />
-        <Controls className="bg-white! border-gray-200! shadow-sm!" />
-      </ReactFlow>
+      {/* Main Content */}
+      <div className="flex-1 relative">
+        {/* Toggle Sidebar Button */}
+        {!showSidebar && (
+          <button
+            onClick={() => setShowSidebar(true)}
+            className="fixed top-4 left-4 z-50 p-2 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-gray-50"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        )}
 
-      <InputBar
-        onSend={handleSend}
-        messages={messages}
-        shortLabels={shortLabels}
-        treeLabels={treeLabels}
-        treeIndices={treeIndices}
-        replyingTo={replyingTo}
-        onCancelReply={() => setReplyingTo(null)}
-        disabled={isLoading}
-      />
+        {/* Model Selector */}
+        <div className="fixed top-4 right-4 z-50 flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
+          <select
+            value={selectedProvider}
+            onChange={(e) => {
+              const provider = e.target.value as ModelProvider;
+              setSelectedProvider(provider);
+              setSelectedModel(MODEL_OPTIONS[provider][0]);
+            }}
+            className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-700"
+          >
+            <option value="gemini">Gemini</option>
+            <option value="ollama">Ollama</option>
+          </select>
+          <span className="text-gray-300">|</span>
+          <select
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-600"
+          >
+            {MODEL_OPTIONS[selectedProvider].map((model) => (
+              <option key={model} value={model}>
+                {model}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Circular warning */}
+        {circularWarning && (
+          <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-red-100 border border-red-300 rounded-lg text-red-700 text-sm">
+            ⚠ {circularWarning}
+          </div>
+        )}
+
+        {/* Loading State */}
+        {isLoadingConversation && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/50 z-40">
+            <div className="flex items-center gap-2 text-gray-600">
+              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Loading conversation...
+            </div>
+          </div>
+        )}
+
+        {/* Empty State */}
+        {!currentConversationId && !isLoadingConversation && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500">
+            <svg className="w-16 h-16 mb-4 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+            </svg>
+            <p className="text-lg font-medium mb-2">No conversation selected</p>
+            <p className="text-sm text-gray-400 mb-4">Select a conversation from the sidebar or create a new one</p>
+            <button
+              onClick={handleNewConversation}
+              className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-gray-800 transition-colors"
+            >
+              New Conversation
+            </button>
+          </div>
+        )}
+
+        {/* ReactFlow Canvas */}
+        {currentConversationId && (
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
+            fitView
+            minZoom={0.1}
+            maxZoom={2}
+            proOptions={{ hideAttribution: true }}
+            className="bg-gray-50"
+          >
+            <Background color="#e5e7eb" gap={20} />
+            <Controls className="bg-white! border-gray-200! shadow-sm!" />
+          </ReactFlow>
+        )}
+
+        {/* Input Bar */}
+        {currentConversationId && (
+          <InputBar
+            onSend={handleSend}
+            messages={messages}
+            shortLabels={shortLabels}
+            treeLabels={treeLabels}
+            treeIndices={treeIndices}
+            replyingTo={replyingTo}
+            onCancelReply={() => setReplyingTo(null)}
+            disabled={isLoading}
+          />
+        )}
+      </div>
     </div>
   );
 }

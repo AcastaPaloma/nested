@@ -2,6 +2,7 @@
 
 export type ChatRole = "user" | "assistant";
 
+// UI-facing message type (used by ReactFlow nodes)
 export type ChatMessage = {
   id: string;
   parentId: string | null; // Reply-to connection (forms the main tree)
@@ -12,6 +13,32 @@ export type ChatMessage = {
   isStreaming?: boolean;
   isCollapsed?: boolean; // Whether the node content is collapsed
 };
+
+// Generic message interface that works with both ChatMessage and database messages
+export interface MessageLike {
+  id: string;
+  parent_id?: string | null;
+  parentId?: string | null;
+  role: ChatRole;
+  content: string;
+  created_at?: string;
+  createdAt?: number;
+  branchReferences?: string[];
+  isStreaming?: boolean;
+  isCollapsed?: boolean;
+}
+
+// Helper to get parent ID from any message type
+export function getParentId(msg: MessageLike): string | null {
+  return msg.parent_id ?? msg.parentId ?? null;
+}
+
+// Helper to get creation timestamp from any message type
+export function getCreatedAt(msg: MessageLike): number {
+  if (msg.createdAt !== undefined) return msg.createdAt;
+  if (msg.created_at) return new Date(msg.created_at).getTime();
+  return 0;
+}
 
 export type NodePosition = {
   x: number;
@@ -75,23 +102,23 @@ export function createId(): string {
 }
 
 // Get the root node ID for any message in a tree
-export function getRootId(
-  messagesById: Map<string, ChatMessage>,
+export function getRootId<T extends MessageLike>(
+  messagesById: Map<string, T>,
   nodeId: string
 ): string {
   let current = messagesById.get(nodeId);
-  while (current?.parentId) {
-    current = messagesById.get(current.parentId);
+  while (current && getParentId(current)) {
+    current = messagesById.get(getParentId(current)!);
   }
   return current?.id ?? nodeId;
 }
 
 // Get all nodes in a tree
-export function getTreeNodes(
-  messages: ChatMessage[],
+export function getTreeNodes<T extends MessageLike>(
+  messages: T[],
   rootId: string
-): ChatMessage[] {
-  const nodes: ChatMessage[] = [];
+): T[] {
+  const nodes: T[] = [];
   const visited = new Set<string>();
   const queue = [rootId];
 
@@ -103,7 +130,7 @@ export function getTreeNodes(
     const node = messages.find((m) => m.id === id);
     if (node) {
       nodes.push(node);
-      const children = messages.filter((m) => m.parentId === id);
+      const children = messages.filter((m) => getParentId(m) === id);
       queue.push(...children.map((c) => c.id));
     }
   }
@@ -112,8 +139,8 @@ export function getTreeNodes(
 }
 
 // Generate a summary for a tree based on first user message
-export function generateTreeSummary(
-  messages: ChatMessage[],
+export function generateTreeSummary<T extends MessageLike>(
+  messages: T[],
   rootId: string
 ): string {
   const treeNodes = getTreeNodes(messages, rootId);
@@ -127,13 +154,13 @@ export function generateTreeSummary(
 
 // Generate short labels like A1, A2, B1, B2...
 // Each root tree gets a letter, nodes within get numbers
-export function generateShortLabels(
-  messages: ChatMessage[]
+export function generateShortLabels<T extends MessageLike>(
+  messages: T[]
 ): { labels: Map<string, string>; treeLabels: Map<string, string>; treeIndices: Map<string, number> } {
   const labels = new Map<string, string>();
   const treeLabels = new Map<string, string>(); // Maps node ID to tree letter
   const treeIndices = new Map<string, number>(); // Maps node ID to tree index
-  const roots = messages.filter((m) => !m.parentId);
+  const roots = messages.filter((m) => !getParentId(m));
 
   roots.forEach((root, treeIndex) => {
     const letter = String.fromCharCode(65 + (treeIndex % 26)); // A, B, C...
@@ -153,8 +180,8 @@ export function generateShortLabels(
       treeIndices.set(nodeId, treeIndex);
 
       // Find children
-      const children = messages.filter((m) => m.parentId === nodeId);
-      children.sort((a, b) => a.createdAt - b.createdAt);
+      const children = messages.filter((m) => getParentId(m) === nodeId);
+      children.sort((a, b) => getCreatedAt(a) - getCreatedAt(b));
       queue.push(...children.map((c) => c.id));
     }
   });
@@ -163,18 +190,19 @@ export function generateShortLabels(
 }
 
 // Get all ancestors of a message (for context aggregation)
-export function getAncestry(
-  messagesById: Map<string, ChatMessage>,
+export function getAncestry<T extends MessageLike>(
+  messagesById: Map<string, T>,
   nodeId: string
-): ChatMessage[] {
-  const chain: ChatMessage[] = [];
+): T[] {
+  const chain: T[] = [];
   const visited = new Set<string>();
   let current = messagesById.get(nodeId);
 
   while (current && !visited.has(current.id)) {
     visited.add(current.id);
     chain.push(current);
-    current = current.parentId ? messagesById.get(current.parentId) : undefined;
+    const parentId = getParentId(current);
+    current = parentId ? messagesById.get(parentId) : undefined;
   }
 
   chain.reverse();
@@ -182,18 +210,18 @@ export function getAncestry(
 }
 
 // Aggregate context for a request: ancestry + entire referenced branches
-export function aggregateContext(
-  messages: ChatMessage[],
-  messagesById: Map<string, ChatMessage>,
+export function aggregateContext<T extends MessageLike>(
+  messages: T[],
+  messagesById: Map<string, T>,
   nodeId: string,
   branchReferences: string[] // These are ROOT node IDs
-): { messages: ChatMessage[]; circularWarning: string | null } {
+): { messages: T[]; circularWarning: string | null } {
   const visited = new Set<string>();
-  const allMessages: ChatMessage[] = [];
+  const allMessages: T[] = [];
   let circularWarning: string | null = null;
 
   // Helper to add messages without duplicates
-  const addMessages = (msgs: ChatMessage[], isReference: boolean) => {
+  const addMessages = (msgs: T[], isReference: boolean) => {
     for (const msg of msgs) {
       if (visited.has(msg.id)) {
         if (isReference) {
@@ -217,14 +245,14 @@ export function aggregateContext(
   }
 
   // Sort by creation time for proper conversation order
-  allMessages.sort((a, b) => a.createdAt - b.createdAt);
+  allMessages.sort((a, b) => getCreatedAt(a) - getCreatedAt(b));
 
   return { messages: allMessages, circularWarning };
 }
 
 // Detect if adding an edge would create a circular reference
-export function wouldCreateCircle(
-  messagesById: Map<string, ChatMessage>,
+export function wouldCreateCircle<T extends MessageLike>(
+  messagesById: Map<string, T>,
   fromId: string,
   toId: string
 ): boolean {
@@ -234,23 +262,23 @@ export function wouldCreateCircle(
 }
 
 // Get the last message in a branch (leaf node)
-export function isLastInBranch(
-  messages: ChatMessage[],
+export function isLastInBranch<T extends MessageLike>(
+  messages: T[],
   nodeId: string
 ): boolean {
-  return !messages.some((m) => m.parentId === nodeId);
+  return !messages.some((m) => getParentId(m) === nodeId);
 }
 
 // Delete a subtree (for edit functionality)
-export function deleteSubtree(
-  messages: ChatMessage[],
+export function deleteSubtree<T extends MessageLike>(
+  messages: T[],
   nodeId: string
-): ChatMessage[] {
+): T[] {
   const toDelete = new Set<string>();
 
   const collectDescendants = (id: string) => {
     toDelete.add(id);
-    const children = messages.filter((m) => m.parentId === id);
+    const children = messages.filter((m) => getParentId(m) === id);
     children.forEach((c) => collectDescendants(c.id));
   };
 

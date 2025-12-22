@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import type { ChatMessage } from "../types";
-import { TREE_PALETTES } from "../types";
+import type { MessageLike } from "../types";
+import { TREE_PALETTES, getParentId } from "../types";
 
 type InputBarProps = {
   onSend: (content: string, branchReferences: string[]) => void;
-  messages: ChatMessage[];
+  messages: MessageLike[];
   shortLabels: Map<string, string>;
   treeLabels: Map<string, string>;
   treeIndices: Map<string, number>;
@@ -34,7 +34,7 @@ export function InputBar({
 
   // Get root nodes (branches) for referencing
   const rootNodes = useMemo(
-    () => messages.filter((m) => !m.parentId),
+    () => messages.filter((m) => !getParentId(m)),
     [messages]
   );
 
