@@ -39,7 +39,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
     // Collect all referenced branch messages
     const referencedMessages: Message[] = [];
-    
+
     if (references && references.length > 0) {
       for (const ref of references) {
         // Get the entire tree from the referenced message's root
@@ -62,7 +62,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const allMessages = [...ancestry, ...referencedMessages];
     const uniqueMessages = Array.from(
       new Map(allMessages.map((m) => [m.id, m])).values()
-    ).sort((a, b) => 
+    ).sort((a, b) =>
       new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
     );
 

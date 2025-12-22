@@ -142,7 +142,7 @@ export function useConversation(conversationId: string | null) {
       }
 
       const message = await response.json();
-      
+
       // Optimistically add to local state (realtime will confirm)
       setMessages((prev) => {
         if (prev.some((m) => m.id === message.id)) return prev;
@@ -168,7 +168,7 @@ export function useConversation(conversationId: string | null) {
     }
 
     const message = await response.json();
-    
+
     // Optimistically update local state
     setMessages((prev) =>
       prev.map((m) => (m.id === id ? message : m))
@@ -205,7 +205,7 @@ export function useConversation(conversationId: string | null) {
   // Get context for LLM
   const getContext = useCallback(async (messageId: string) => {
     const response = await fetch(`/api/messages/${messageId}/context`);
-    
+
     if (!response.ok) {
       const data = await response.json();
       throw new Error(data.error || "Failed to get context");

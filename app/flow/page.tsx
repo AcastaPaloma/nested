@@ -454,11 +454,11 @@ function FlowCanvas() {
           isCollapsed: false,
           branchReferences,
         };
-        
+
         // Get ancestry for the parent (if any) and add the new user message
         const contextMessages: DisplayMessage[] = [];
         const visited = new Set<string>();
-        
+
         if (replyingTo) {
           // Get ancestry from parent
           let current = messagesById.get(replyingTo);

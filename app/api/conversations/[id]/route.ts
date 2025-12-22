@@ -44,7 +44,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     // Get all message references for this conversation's messages
     const messageIds = messages?.map((m) => m.id) || [];
     let references: Array<{ source_message_id: string; target_message_id: string }> = [];
-    
+
     if (messageIds.length > 0) {
       const { data: refs, error: refError } = await supabase
         .from("message_references")
