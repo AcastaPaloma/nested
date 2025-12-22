@@ -33,10 +33,21 @@ import {
   AGENT_PALETTE,
 } from "./types";
 
+// Model provider type
+type ModelProvider = 'gemini' | 'ollama';
+
+// Available models configuration
+const MODEL_OPTIONS: Record<ModelProvider, string[]> = {
+  gemini: ['gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro'],
+  ollama: ['llama3', 'mistral', 'codellama', 'mario'],
+};
+
 // LLM API call with streaming
 async function callLLM(
   payload: {
     messages: Array<{ role: "user" | "assistant"; content: string }>;
+    provider?: ModelProvider;
+    model?: string;
   },
   onChunk: (text: string) => void
 ): Promise<string> {
@@ -94,6 +105,8 @@ function FlowCanvas() {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [circularWarning, setCircularWarning] = useState<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<ModelProvider>('gemini');
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash-lite');
   const { setCenter } = useReactFlow();
   const lastNodeIdRef = useRef<string | null>(null);
   const hasInitialLayoutRef = useRef(false);
@@ -310,6 +323,8 @@ function FlowCanvas() {
               role: m.role,
               content: m.content,
             })),
+            provider: selectedProvider,
+            model: selectedModel,
           },
           (streamedText: string) => {
             setMessages((prev) =>
@@ -354,11 +369,39 @@ function FlowCanvas() {
         setIsLoading(false);
       }
     },
-    [replyingTo, messagesById, messages, treeLabels]
+    [replyingTo, messagesById, messages, treeLabels, selectedProvider, selectedModel]
   );
 
   return (
     <div className="w-screen h-screen bg-white">
+      {/* Model Selector - Top Right */}
+      <div className="fixed top-4 right-4 z-50 flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
+        <select
+          value={selectedProvider}
+          onChange={(e) => {
+            const provider = e.target.value as ModelProvider;
+            setSelectedProvider(provider);
+            setSelectedModel(MODEL_OPTIONS[provider][0]);
+          }}
+          className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-700"
+        >
+          <option value="gemini">Gemini</option>
+          <option value="ollama">Ollama</option>
+        </select>
+        <span className="text-gray-300">|</span>
+        <select
+          value={selectedModel}
+          onChange={(e) => setSelectedModel(e.target.value)}
+          className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-600"
+        >
+          {MODEL_OPTIONS[selectedProvider].map((model) => (
+            <option key={model} value={model}>
+              {model}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {/* Circular warning */}
       {circularWarning && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-red-100 border border-red-300 rounded-lg text-red-700 text-sm">

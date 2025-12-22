@@ -1,25 +1,119 @@
 import { GoogleGenAI } from '@google/genai'
+import ollama from 'ollama'
 
 type ChatRole = 'user' | 'assistant' | 'system'
+
+// Available model providers
+type ModelProvider = 'gemini' | 'ollama'
 
 type LlmRequest = {
   messages?: Array<{ role: ChatRole; content: string }>
   selection?: string
+  model?: string // Model name (e.g., 'gemini-2.5-flash-lite', 'llama3', 'mario')
+  provider?: ModelProvider // 'gemini' or 'ollama'
 }
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
+
+// Default models for each provider
+const DEFAULT_MODELS: Record<ModelProvider, string> = {
+  gemini: 'gemini-2.5-flash-lite',
+  ollama: 'gemma3:270b',
+}
 
 export async function POST(req: Request) {
   const body = (await req.json()) as LlmRequest
 
   const messages = body.messages ?? []
   const selection = body.selection?.trim()
+  const provider: ModelProvider = body.provider ?? 'gemini'
+  const model = body.model ?? DEFAULT_MODELS[provider]
 
   if (messages.length === 0) {
     return new Response('No messages provided', { status: 400 })
   }
 
-  // Build Gemini contents array`
+  // Route to appropriate provider
+  if (provider === 'ollama') {
+    return handleOllama(messages, selection, model)
+  } else {
+    return handleGemini(messages, selection, model)
+  }
+}
+
+// Handle Ollama requests with streaming
+async function handleOllama(
+  messages: Array<{ role: ChatRole; content: string }>,
+  selection: string | undefined,
+  model: string
+) {
+  // Build Ollama messages array
+  const ollamaMessages: Array<{ role: ChatRole; content: string }> = []
+
+  if (selection) {
+    ollamaMessages.push({
+      role: 'system',
+      content: `User highlighted this text for context:\n${selection}`,
+    })
+  }
+
+  ollamaMessages.push(...messages)
+
+  console.log(`Sending to Ollama (${model}):`, JSON.stringify(ollamaMessages, null, 2))
+
+  try {
+    // Use streaming for real-time response
+    const response = await ollama.chat({
+      model,
+      messages: ollamaMessages,
+      stream: true,
+    })
+
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          let fullText = ''
+          for await (const chunk of response) {
+            const text = chunk.message?.content
+            if (text) {
+              fullText += text
+              // Send cumulative text (same format as Gemini)
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: fullText })}\n\n`))
+            }
+          }
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+        } catch (error) {
+          controller.error(error)
+        }
+      },
+    })
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    })
+  } catch (error) {
+    console.error('Ollama API error:', error)
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    return new Response(JSON.stringify({ error: message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+}
+
+// Handle Gemini requests with streaming
+async function handleGemini(
+  messages: Array<{ role: ChatRole; content: string }>,
+  selection: string | undefined,
+  model: string
+) {
+  // Build Gemini contents array
   // Gemini uses 'user' and 'model' roles (not 'assistant')
   const history: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = []
 
@@ -45,12 +139,12 @@ export async function POST(req: Request) {
     })
   }
 
-  console.log('Sending to Gemini:', JSON.stringify(history, null, 2))
+  console.log(`Sending to Gemini (${model}):`, JSON.stringify(history, null, 2))
 
   try {
     // Use streaming for real-time response
     const response = await ai.models.generateContentStream({
-      model: 'gemini-2.5-flash-lite',
+      model,
       contents: history,
       config: {
         thinkingConfig: {
