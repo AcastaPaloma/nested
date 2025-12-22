@@ -447,8 +447,62 @@ function FlowCanvas() {
           return next;
         });
 
-        // Build context
-        const contextMessages = getContextMessages(userMsg.id, branchReferences);
+        // Build context - include the new user message which may not be in state yet
+        const userDisplayMsg: DisplayMessage = {
+          ...userMsg,
+          isStreaming: false,
+          isCollapsed: false,
+          branchReferences,
+        };
+        
+        // Get ancestry for the parent (if any) and add the new user message
+        const contextMessages: DisplayMessage[] = [];
+        const visited = new Set<string>();
+        
+        if (replyingTo) {
+          // Get ancestry from parent
+          let current = messagesById.get(replyingTo);
+          const ancestry: DisplayMessage[] = [];
+          while (current && !visited.has(current.id)) {
+            visited.add(current.id);
+            ancestry.push(current);
+            current = current.parent_id ? messagesById.get(current.parent_id) : undefined;
+          }
+          ancestry.reverse();
+          contextMessages.push(...ancestry);
+        }
+        contextMessages.push(userDisplayMsg);
+        visited.add(userDisplayMsg.id);
+
+        // Add referenced branches
+        for (const refId of branchReferences) {
+          // Get root of referenced message
+          let root = messagesById.get(refId);
+          while (root?.parent_id) {
+            root = messagesById.get(root.parent_id);
+          }
+          if (root && !visited.has(root.id)) {
+            // Get all nodes in that tree
+            const queue = [root.id];
+            while (queue.length > 0) {
+              const id = queue.shift()!;
+              if (visited.has(id)) continue;
+              visited.add(id);
+              const msg = messagesById.get(id);
+              if (msg) {
+                contextMessages.push(msg);
+                messages
+                  .filter((m) => m.parent_id === id)
+                  .forEach((m) => queue.push(m.id));
+              }
+            }
+          }
+        }
+
+        // Sort by creation time
+        contextMessages.sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
 
         // Call LLM
         const llmText = await callLLM(

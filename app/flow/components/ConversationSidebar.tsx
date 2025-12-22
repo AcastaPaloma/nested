@@ -164,9 +164,9 @@ export function ConversationSidebar({
                     </div>
                   </div>
                 ) : (
-                  <button
+                  <div
                     onClick={() => onSelect(conv.id)}
-                    className="w-full text-left p-3"
+                    className="w-full text-left p-3 cursor-pointer"
                   >
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-sm text-gray-900 truncate flex-1">
@@ -202,7 +202,7 @@ export function ConversationSidebar({
                     <span className="text-xs text-gray-500">
                       {formatDate(conv.updated_at)}
                     </span>
-                  </button>
+                  </div>
                 )}
               </div>
             ))}
