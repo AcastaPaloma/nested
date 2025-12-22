@@ -18,7 +18,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY })
 // Default models for each provider
 const DEFAULT_MODELS: Record<ModelProvider, string> = {
   gemini: 'gemini-2.5-flash-lite',
-  ollama: 'gemma3:270b',
+  ollama: 'gemma3:270m',
 }
 
 export async function POST(req: Request) {
@@ -73,13 +73,11 @@ async function handleOllama(
     const stream = new ReadableStream({
       async start(controller) {
         try {
-          let fullText = ''
           for await (const chunk of response) {
             const text = chunk.message?.content
             if (text) {
-              fullText += text
-              // Send cumulative text (same format as Gemini)
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text: fullText })}\n\n`))
+              // Send just the incremental chunk (client will accumulate)
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ text })}\n\n`))
             }
           }
           controller.enqueue(encoder.encode('data: [DONE]\n\n'))

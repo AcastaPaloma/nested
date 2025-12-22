@@ -39,7 +39,7 @@ type ModelProvider = 'gemini' | 'ollama';
 // Available models configuration
 const MODEL_OPTIONS: Record<ModelProvider, string[]> = {
   gemini: ['gemini-2.5-flash-lite', 'gemini-2.0-flash', 'gemini-1.5-pro'],
-  ollama: ['llama3', 'mistral', 'codellama', 'mario'],
+  ollama: ['gemma3:270m', 'mario'],
 };
 
 // LLM API call with streaming
