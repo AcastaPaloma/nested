@@ -88,10 +88,13 @@ function getAncestorsIncludingSelf(
   return chain;
 }
 
-async function callStubbedLLM(payload: {
-  messages: Array<{ role: ChatRole; content: string }>;
-  selection?: string;
-}) {
+async function callStubbedLLM(
+  payload: {
+    messages: Array<{ role: ChatRole; content: string }>;
+    selection?: string;
+  },
+  onChunk: (text: string) => void
+): Promise<string> {
   console.log('Payload sent to /api/llm:', payload);
 
   const res = await fetch('/api/llm', {
@@ -105,9 +108,41 @@ async function callStubbedLLM(payload: {
     throw new Error(text || `Request failed: ${res.status}`);
   }
 
-  const data = (await res.json()) as {content?: string };
+  // Handle streaming response
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error('No response body');
+  }
 
-  return data.content ?? ""
+  const decoder = new TextDecoder();
+  let fullText = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value, { stream: true });
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(data) as { text?: string };
+          if (parsed.text) {
+            fullText += parsed.text;
+            onChunk(fullText);
+          }
+        } catch {
+          // Ignore parse errors for incomplete chunks
+        }
+      }
+    }
+  }
+
+  return fullText;
 }
 
 function countDescendants(node: ThreadNode): number {
@@ -273,6 +308,7 @@ export default function ThreadedChat() {
   const sendReply = async (parentId: string | null, content: string, selection?: string | null) => {
     const now = Date.now();
     const userId = createId();
+    const assistantId = createId();
 
     const userMsg: ChatMessage = {
       id: userId,
@@ -282,7 +318,16 @@ export default function ThreadedChat() {
       createdAt: now,
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    // Create assistant message placeholder for streaming
+    const assistantMsg: ChatMessage = {
+      id: assistantId,
+      parentId: userId,
+      role: "assistant",
+      content: "",
+      createdAt: Date.now(),
+    };
+
+    setMessages((prev) => [...prev, userMsg, assistantMsg]);
     setLoadingUnderUserId(userId);
 
     try {
@@ -291,32 +336,38 @@ export default function ThreadedChat() {
         userMsg.id
       );
 
-      const llmText = await callStubbedLLM({
-        messages: path.map((m) => ({ role: m.role, content: m.content })),
-        selection: selection ?? undefined,
-      });
+      const llmText = await callStubbedLLM(
+        {
+          messages: path.map((m) => ({ role: m.role, content: m.content })),
+          selection: selection ?? undefined,
+        },
+        // onChunk callback - update assistant message content in real-time
+        (streamedText: string) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: streamedText } : m
+            )
+          );
+        }
+      );
 
-      const assistantMsg: ChatMessage = {
-        id: createId(),
-        parentId: userId,
-        role: "assistant",
-        content: llmText || "(empty response)",
-        createdAt: Date.now(),
-      };
-
-      setMessages((prev) => [...prev, assistantMsg]);
+      // Final update with complete text
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: llmText || "(empty response)" }
+            : m
+        )
+      );
     } catch (e) {
       const err = e instanceof Error ? e.message : "Unknown error";
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: createId(),
-          parentId: userId,
-          role: "assistant",
-          content: `Error calling /api/llm: ${err}`,
-          createdAt: Date.now(),
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: `Error calling /api/llm: ${err}` }
+            : m
+        )
+      );
     } finally {
       setLoadingUnderUserId(null);
     }

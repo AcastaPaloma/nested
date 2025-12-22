@@ -1,0 +1,259 @@
+// Flow canvas types and utilities
+
+export type ChatRole = "user" | "assistant";
+
+export type ChatMessage = {
+  id: string;
+  parentId: string | null; // Reply-to connection (forms the main tree)
+  role: ChatRole;
+  content: string;
+  createdAt: number;
+  branchReferences: string[]; // @ mentioned BRANCH IDs (root node IDs)
+  isStreaming?: boolean;
+  isCollapsed?: boolean; // Whether the node content is collapsed
+};
+
+export type NodePosition = {
+  x: number;
+  y: number;
+};
+
+// Tree color palettes - 5 distinct palettes for different branches (USER nodes only)
+export const TREE_PALETTES = [
+  { bg: "bg-blue-50", border: "border-blue-200", accent: "bg-blue-100", text: "text-blue-600", ring: "ring-blue-400", handle: "#60a5fa", hex: "#dbeafe" },
+  { bg: "bg-emerald-50", border: "border-emerald-200", accent: "bg-emerald-100", text: "text-emerald-600", ring: "ring-emerald-400", handle: "#34d399", hex: "#d1fae5" },
+  { bg: "bg-amber-50", border: "border-amber-200", accent: "bg-amber-100", text: "text-amber-600", ring: "ring-amber-400", handle: "#fbbf24", hex: "#fef3c7" },
+  { bg: "bg-purple-50", border: "border-purple-200", accent: "bg-purple-100", text: "text-purple-600", ring: "ring-purple-400", handle: "#a855f7", hex: "#f3e8ff" },
+  { bg: "bg-rose-50", border: "border-rose-200", accent: "bg-rose-100", text: "text-rose-600", ring: "ring-rose-400", handle: "#fb7185", hex: "#ffe4e6" },
+] as const;
+
+// Gray palette for AGENT nodes (always gray)
+export const AGENT_PALETTE = {
+  bg: "bg-gray-50", border: "border-gray-200", accent: "bg-gray-100", text: "text-gray-600", ring: "ring-gray-400", handle: "#9ca3af", hex: "#f9fafb"
+} as const;
+
+export type TreePalette = typeof TREE_PALETTES[number] | typeof AGENT_PALETTE;
+
+// For ReactFlow node data
+export type FlowNodeData = {
+  message: ChatMessage;
+  onReply?: (nodeId: string) => void;
+  onEdit?: (nodeId: string) => void;
+  onToggleCollapse?: (nodeId: string) => void;
+  isLastInBranch?: boolean;
+  shortLabel: string; // e.g., "A1", "B3" for @ referencing
+  treeLabel: string; // e.g., "A", "B" for branch referencing
+  treeIndex: number; // Index of the tree for color palette
+  isRoot: boolean; // Whether this is a root node
+  treeSummary?: string; // Summary of the entire tree (for root nodes)
+  palette: TreePalette;
+};
+
+// Edge types
+export type EdgeType = "reply" | "reference";
+
+export type FlowEdgeData = {
+  edgeType: EdgeType;
+  isCircular?: boolean; // For warning display
+};
+
+// Canvas state for backend persistence
+export type CanvasState = {
+  id: string;
+  name: string;
+  messages: ChatMessage[];
+  createdAt: number;
+  updatedAt: number;
+};
+
+// Helper to generate unique IDs
+export function createId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+// Get the root node ID for any message in a tree
+export function getRootId(
+  messagesById: Map<string, ChatMessage>,
+  nodeId: string
+): string {
+  let current = messagesById.get(nodeId);
+  while (current?.parentId) {
+    current = messagesById.get(current.parentId);
+  }
+  return current?.id ?? nodeId;
+}
+
+// Get all nodes in a tree
+export function getTreeNodes(
+  messages: ChatMessage[],
+  rootId: string
+): ChatMessage[] {
+  const nodes: ChatMessage[] = [];
+  const visited = new Set<string>();
+  const queue = [rootId];
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+
+    const node = messages.find((m) => m.id === id);
+    if (node) {
+      nodes.push(node);
+      const children = messages.filter((m) => m.parentId === id);
+      queue.push(...children.map((c) => c.id));
+    }
+  }
+
+  return nodes;
+}
+
+// Generate a summary for a tree based on first user message
+export function generateTreeSummary(
+  messages: ChatMessage[],
+  rootId: string
+): string {
+  const treeNodes = getTreeNodes(messages, rootId);
+  const firstUserMsg = treeNodes.find((m) => m.role === "user");
+  if (!firstUserMsg) return "Empty conversation";
+
+  const content = firstUserMsg.content;
+  if (content.length <= 50) return content;
+  return content.slice(0, 50) + "...";
+}
+
+// Generate short labels like A1, A2, B1, B2...
+// Each root tree gets a letter, nodes within get numbers
+export function generateShortLabels(
+  messages: ChatMessage[]
+): { labels: Map<string, string>; treeLabels: Map<string, string>; treeIndices: Map<string, number> } {
+  const labels = new Map<string, string>();
+  const treeLabels = new Map<string, string>(); // Maps node ID to tree letter
+  const treeIndices = new Map<string, number>(); // Maps node ID to tree index
+  const roots = messages.filter((m) => !m.parentId);
+
+  roots.forEach((root, treeIndex) => {
+    const letter = String.fromCharCode(65 + (treeIndex % 26)); // A, B, C...
+    let nodeIndex = 1;
+
+    // BFS through the tree
+    const queue: string[] = [root.id];
+    const visited = new Set<string>();
+
+    while (queue.length > 0) {
+      const nodeId = queue.shift()!;
+      if (visited.has(nodeId)) continue;
+      visited.add(nodeId);
+
+      labels.set(nodeId, `${letter}${nodeIndex++}`);
+      treeLabels.set(nodeId, letter);
+      treeIndices.set(nodeId, treeIndex);
+
+      // Find children
+      const children = messages.filter((m) => m.parentId === nodeId);
+      children.sort((a, b) => a.createdAt - b.createdAt);
+      queue.push(...children.map((c) => c.id));
+    }
+  });
+
+  return { labels, treeLabels, treeIndices };
+}
+
+// Get all ancestors of a message (for context aggregation)
+export function getAncestry(
+  messagesById: Map<string, ChatMessage>,
+  nodeId: string
+): ChatMessage[] {
+  const chain: ChatMessage[] = [];
+  const visited = new Set<string>();
+  let current = messagesById.get(nodeId);
+
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id);
+    chain.push(current);
+    current = current.parentId ? messagesById.get(current.parentId) : undefined;
+  }
+
+  chain.reverse();
+  return chain;
+}
+
+// Aggregate context for a request: ancestry + entire referenced branches
+export function aggregateContext(
+  messages: ChatMessage[],
+  messagesById: Map<string, ChatMessage>,
+  nodeId: string,
+  branchReferences: string[] // These are ROOT node IDs
+): { messages: ChatMessage[]; circularWarning: string | null } {
+  const visited = new Set<string>();
+  const allMessages: ChatMessage[] = [];
+  let circularWarning: string | null = null;
+
+  // Helper to add messages without duplicates
+  const addMessages = (msgs: ChatMessage[], isReference: boolean) => {
+    for (const msg of msgs) {
+      if (visited.has(msg.id)) {
+        if (isReference) {
+          circularWarning = `Some messages already in context`;
+        }
+        continue;
+      }
+      visited.add(msg.id);
+      allMessages.push(msg);
+    }
+  };
+
+  // First, add the main ancestry (reply chain)
+  const ancestry = getAncestry(messagesById, nodeId);
+  addMessages(ancestry, false);
+
+  // Then add entire referenced branches
+  for (const branchRootId of branchReferences) {
+    const branchNodes = getTreeNodes(messages, branchRootId);
+    addMessages(branchNodes, true);
+  }
+
+  // Sort by creation time for proper conversation order
+  allMessages.sort((a, b) => a.createdAt - b.createdAt);
+
+  return { messages: allMessages, circularWarning };
+}
+
+// Detect if adding an edge would create a circular reference
+export function wouldCreateCircle(
+  messagesById: Map<string, ChatMessage>,
+  fromId: string,
+  toId: string
+): boolean {
+  // Check if toId is an ancestor of fromId
+  const ancestry = getAncestry(messagesById, fromId);
+  return ancestry.some((m) => m.id === toId);
+}
+
+// Get the last message in a branch (leaf node)
+export function isLastInBranch(
+  messages: ChatMessage[],
+  nodeId: string
+): boolean {
+  return !messages.some((m) => m.parentId === nodeId);
+}
+
+// Delete a subtree (for edit functionality)
+export function deleteSubtree(
+  messages: ChatMessage[],
+  nodeId: string
+): ChatMessage[] {
+  const toDelete = new Set<string>();
+
+  const collectDescendants = (id: string) => {
+    toDelete.add(id);
+    const children = messages.filter((m) => m.parentId === id);
+    children.forEach((c) => collectDescendants(c.id));
+  };
+
+  collectDescendants(nodeId);
+  return messages.filter((m) => !toDelete.has(m.id));
+}
