@@ -25,3 +25,28 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ReactFlow selection box styling - pink dotted border */
+.react-flow__selection {
+  background: rgba(255, 105, 180, 0.08) !important;
+  border: 2px dashed #ff69b4 !important;
+  border-radius: 4px;
+}
+
+/* Nodes selection bounding box */
+.react-flow__nodesselection-rect {
+  background: rgba(255, 105, 180, 0.05) !important;
+  border: 2px dashed #ff69b4 !important;
+  border-radius: 4px;
+}
+
+/* Selected node highlight */
+.react-flow__node.selected {
+  box-shadow: 0 0 0 2px #ff69b4 !important;
+}
+
+/* Selected edge highlight */
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #ff69b4 !important;
+  stroke-width: 2px;
+}

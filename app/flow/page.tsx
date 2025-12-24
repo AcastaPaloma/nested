@@ -9,6 +9,8 @@ import {
   useEdgesState,
   useReactFlow,
   ReactFlowProvider,
+  SelectionMode,
+  PanOnScrollMode,
   type Node,
   type Edge,
 } from "@xyflow/react";
@@ -142,6 +144,35 @@ function FlowCanvas() {
   const lastNodeIdRef = useRef<string | null>(null);
   const hasInitialLayoutRef = useRef(false);
   const prevMessageCountRef = useRef(0);
+
+  // Canvas control state - track shift key for horizontal scroll
+  const [panScrollMode, setPanScrollMode] = useState<PanOnScrollMode>(PanOnScrollMode.Vertical);
+  // Invert horizontal scroll only
+  const [panScrollSpeed, setPanScrollSpeed] = useState<number>(1);
+
+  // Handle shift key for horizontal scrolling (with inverted direction)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Shift") {
+        setPanScrollMode(PanOnScrollMode.Horizontal);
+        setPanScrollSpeed(-1); // Invert for horizontal
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") {
+        setPanScrollMode(PanOnScrollMode.Vertical);
+        setPanScrollSpeed(1); // Normal for vertical
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
+  }, []);
 
   // Merge database messages with streaming state
   const messages: DisplayMessage[] = useMemo(() => {
@@ -680,6 +711,22 @@ function FlowCanvas() {
             maxZoom={2}
             proOptions={{ hideAttribution: true }}
             className="bg-gray-50"
+            // Canvas controls:
+            // Ctrl + mousewheel = zoom
+            zoomOnScroll={false}
+            zoomActivationKeyCode="Control"
+            // Mousewheel = vertical pan (up/down), Shift + mousewheel = horizontal pan (left/right)
+            panOnScroll={true}
+            panOnScrollMode={panScrollMode}
+            panOnScrollSpeed={panScrollSpeed}
+            // Left drag = pan canvas
+            panOnDrag={true}
+            // Ctrl + left drag = selection
+            selectionOnDrag={false}
+            selectionKeyCode="Control"
+            selectionMode={SelectionMode.Partial}
+            // Disable zoom on double click
+            zoomOnDoubleClick={false}
           >
             <Background color="#e5e7eb" gap={20} />
             <Controls className="bg-white! border-gray-200! shadow-sm!" />
