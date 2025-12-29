@@ -84,22 +84,6 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
-// Collapsed node summary
-function CollapsedContent({
-  content,
-  palette,
-}: {
-  content: string;
-  palette: TreePalette;
-}) {
-  const summary = content.length > 40 ? content.slice(0, 40) + "..." : content;
-  return (
-    <div className={`px-3 py-2 ${palette.accent} rounded-b-lg`}>
-      <p className={`text-xs ${palette.text} italic`}>{summary}</p>
-    </div>
-  );
-}
-
 // Tree hover preview (shown on root nodes when NOT zoomed in too much)
 // Uses fixed screen size by scaling inversely with zoom
 function TreePreview({
@@ -148,7 +132,7 @@ export const UserNode = memo(function UserNode({
   const {
     message,
     onEdit,
-    onToggleCollapse,
+    onResetSize,
     isLastInBranch,
     shortLabel,
     treeLabel,
@@ -157,7 +141,6 @@ export const UserNode = memo(function UserNode({
     palette,
   } = data;
   const [showPreview, setShowPreview] = useState(false);
-  const isCollapsed = message.isCollapsed ?? false;
   const { zoom } = useViewport();
 
   // Don't show hover preview when zoomed in (zoom > 0.8)
@@ -168,14 +151,14 @@ export const UserNode = memo(function UserNode({
       className={`rounded-lg border shadow-sm transition-all duration-200 ${palette.bg} ${palette.border} ${
         selected ? `ring-2 ${palette.ring}` : ""
       } w-full h-full flex flex-col`}
-      style={{ minWidth: 220, minHeight: isCollapsed ? 60 : 100 }}
+      style={{ minWidth: 220, minHeight: 100 }}
       onMouseEnter={() => isRoot && setShowPreview(true)}
       onMouseLeave={() => setShowPreview(false)}
     >
       {/* Always visible resize handle at bottom-right corner */}
       <NodeResizer
         minWidth={220}
-        minHeight={isCollapsed ? 60 : 100}
+        minHeight={100}
         isVisible={true}
         lineClassName="border-transparent"
         handleClassName="opacity-0"
@@ -229,20 +212,17 @@ export const UserNode = memo(function UserNode({
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={() => onToggleCollapse?.(message.id)}
+            onClick={() => onResetSize?.(message.id)}
             className={`text-xs ${palette.text} hover:opacity-70 px-1`}
-            title={isCollapsed ? "Expand" : "Collapse"}
+            title="Reset to default size"
           >
-            {isCollapsed ? "▶" : "▼"}
+            ⟲
           </button>
         </div>
       </div>
 
       {/* Content */}
-      {isCollapsed ? (
-        <CollapsedContent content={message.content} palette={palette} />
-      ) : (
-        <div className="px-3 py-2 overflow-auto flex-1">
+      <div className="px-3 py-2 overflow-auto flex-1">
           <MarkdownContent content={message.content} />
           {message.branchReferences.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
@@ -257,10 +237,9 @@ export const UserNode = memo(function UserNode({
             </div>
           )}
         </div>
-      )}
 
       {/* Actions */}
-      {!isCollapsed && isLastInBranch && onEdit && (
+      {isLastInBranch && onEdit && (
         <div className={`px-3 py-2 border-t ${palette.border}`}>
           <button
             onClick={() => onEdit(message.id)}
@@ -287,8 +266,7 @@ export const AgentNode = memo(function AgentNode({
   data,
   selected,
 }: NodeProps<Node<FlowNodeData>>) {
-  const { message, onReply, onToggleCollapse, shortLabel, palette } = data;
-  const isCollapsed = message.isCollapsed ?? false;
+  const { message, onReply, onResetSize, shortLabel, palette } = data;
 
   // Streaming state - show thinking animation
   if (message.isStreaming && !message.content) {
@@ -347,17 +325,21 @@ export const AgentNode = memo(function AgentNode({
     );
   }
 
+  // Default fixed size for agent nodes - consistent appearance
+  const MIN_WIDTH = 280;
+  const MIN_HEIGHT = 100;
+
   return (
     <div
       className={`rounded-lg border shadow-sm transition-all duration-200 ${palette.bg} ${palette.border} ${
         selected ? `ring-2 ${palette.ring}` : ""
       } w-full h-full flex flex-col`}
-      style={{ minWidth: 220, minHeight: isCollapsed ? 60 : 100 }}
+      style={{ minWidth: MIN_WIDTH, minHeight: MIN_HEIGHT }}
     >
       {/* Always visible resize handle */}
       <NodeResizer
-        minWidth={220}
-        minHeight={isCollapsed ? 60 : 100}
+        minWidth={MIN_WIDTH}
+        minHeight={MIN_HEIGHT}
         isVisible={true}
         lineClassName="border-transparent"
         handleClassName="opacity-0"
@@ -394,26 +376,24 @@ export const AgentNode = memo(function AgentNode({
         </div>
         <div className="flex items-center gap-1">
           <button
-            onClick={() => onToggleCollapse?.(message.id)}
+            onClick={() => onResetSize?.(message.id)}
             className={`text-xs ${palette.text} hover:opacity-70 px-1`}
-            title={isCollapsed ? "Expand" : "Collapse"}
+            title="Reset to default size"
           >
-            {isCollapsed ? "▶" : "▼"}
+            ⟲
           </button>
         </div>
       </div>
 
       {/* Content */}
-      {isCollapsed ? (
-        <CollapsedContent content={message.content} palette={palette} />
-      ) : (
-        <div className="px-3 py-2 overflow-auto flex-1">
+      <div className="px-3 py-2 overflow-auto flex-1 min-h-0">
+        <div className="text-sm leading-relaxed">
           <MarkdownContent content={message.content} />
         </div>
-      )}
+      </div>
 
       {/* Actions - only agents can be replied to */}
-      {!isCollapsed && onReply && (
+      {onReply && (
         <div className={`px-3 py-2 border-t ${palette.border}`}>
           <button
             onClick={() => onReply(message.id)}

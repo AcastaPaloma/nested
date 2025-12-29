@@ -66,7 +66,7 @@ export type FlowNodeData = {
   message: ChatMessage;
   onReply?: (nodeId: string) => void;
   onEdit?: (nodeId: string) => void;
-  onToggleCollapse?: (nodeId: string) => void;
+  onResetSize?: (nodeId: string) => void;
   isLastInBranch?: boolean;
   shortLabel: string; // e.g., "A1", "B3" for @ referencing
   treeLabel: string; // e.g., "A", "B" for branch referencing

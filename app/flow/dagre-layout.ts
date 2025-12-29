@@ -2,9 +2,21 @@ import dagre from "@dagrejs/dagre";
 import type { Node, Edge } from "@xyflow/react";
 import type { FlowNodeData, FlowEdgeData } from "./types";
 
-const NODE_WIDTH = 280;
-const NODE_HEIGHT = 120;
+// Default node dimensions - agent nodes use these, user nodes are slightly smaller
+export const AGENT_NODE_WIDTH = 320;
+export const AGENT_NODE_HEIGHT = 200;
+export const USER_NODE_WIDTH = 280;
+export const USER_NODE_HEIGHT = 120;
 const HORIZONTAL_SPACING = 100; // Space between trees
+
+// Helper to get node dimensions based on type
+export function getNodeDimensions(node: Node<FlowNodeData>): { width: number; height: number } {
+  const isAgent = node.type === "agent";
+  return {
+    width: isAgent ? AGENT_NODE_WIDTH : USER_NODE_WIDTH,
+    height: isAgent ? AGENT_NODE_HEIGHT : USER_NODE_HEIGHT,
+  };
+}
 
 export type LayoutDirection = "TB" | "LR";
 
@@ -66,9 +78,10 @@ export function getLayoutedElements(
       marginy: 20,
     });
 
-    // Add nodes
+    // Add nodes with their specific dimensions
     for (const node of treeNodes) {
-      dagreGraph.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+      const dims = getNodeDimensions(node);
+      dagreGraph.setNode(node.id, { width: dims.width, height: dims.height });
     }
 
     // Add edges
@@ -79,15 +92,16 @@ export function getLayoutedElements(
     // Run layout
     dagre.layout(dagreGraph);
 
-    // Get tree bounds
+    // Get tree bounds using max node width for consistent spacing
     let minX = Infinity;
     let maxX = -Infinity;
 
     for (const node of treeNodes) {
       const nodeWithPosition = dagreGraph.node(node.id);
+      const dims = getNodeDimensions(node);
       if (nodeWithPosition) {
-        minX = Math.min(minX, nodeWithPosition.x - NODE_WIDTH / 2);
-        maxX = Math.max(maxX, nodeWithPosition.x + NODE_WIDTH / 2);
+        minX = Math.min(minX, nodeWithPosition.x - dims.width / 2);
+        maxX = Math.max(maxX, nodeWithPosition.x + dims.width / 2);
       }
     }
 
@@ -95,16 +109,20 @@ export function getLayoutedElements(
     const treeWidth = maxX - minX;
     const offsetX = currentX - minX;
 
-    // Apply positions
+    // Apply positions and set initial dimensions
     for (const node of treeNodes) {
       const nodeWithPosition = dagreGraph.node(node.id);
+      const dims = getNodeDimensions(node);
       if (nodeWithPosition) {
         layoutedNodes.push({
           ...node,
           position: {
-            x: nodeWithPosition.x - NODE_WIDTH / 2 + offsetX,
-            y: nodeWithPosition.y - NODE_HEIGHT / 2,
+            x: nodeWithPosition.x - dims.width / 2 + offsetX,
+            y: nodeWithPosition.y - dims.height / 2,
           },
+          // Set initial dimensions so NodeResizer can work with them
+          width: dims.width,
+          height: dims.height,
         });
       }
     }
@@ -124,9 +142,10 @@ export function getZoomPosition(
   const node = nodes.find((n) => n.id === nodeId);
   if (!node) return null;
 
+  const dims = getNodeDimensions(node);
   return {
-    x: node.position.x + NODE_WIDTH / 2,
-    y: node.position.y + NODE_HEIGHT / 2,
+    x: node.position.x + dims.width / 2,
+    y: node.position.y + dims.height / 2,
     zoom: 1,
   };
 }

@@ -20,7 +20,7 @@ import { nodeTypes } from "./components/Nodes";
 import { edgeTypes } from "./components/Edges";
 import { InputBar } from "./components/InputBar";
 import { ConversationSidebar } from "./components/ConversationSidebar";
-import { getLayoutedElements, getZoomPosition } from "./dagre-layout";
+import { getLayoutedElements, getZoomPosition, getNodeDimensions } from "./dagre-layout";
 import {
   type FlowNodeData,
   type FlowEdgeData,
@@ -131,7 +131,6 @@ function FlowCanvas() {
 
   // Local streaming state (for messages being streamed)
   const [streamingMessages, setStreamingMessages] = useState<Map<string, { content: string; isStreaming: boolean }>>(new Map());
-  const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<FlowNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge<FlowEdgeData>>([]);
@@ -140,7 +139,7 @@ function FlowCanvas() {
   const [circularWarning, setCircularWarning] = useState<string | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<ModelProvider>("gemini");
   const [selectedModel, setSelectedModel] = useState<string>("gemini-2.5-flash-lite");
-  const { setCenter } = useReactFlow();
+  const { setCenter, zoomIn, zoomOut, fitView } = useReactFlow();
   const lastNodeIdRef = useRef<string | null>(null);
   const hasInitialLayoutRef = useRef(false);
   const prevMessageCountRef = useRef(0);
@@ -149,19 +148,228 @@ function FlowCanvas() {
   const [panScrollMode, setPanScrollMode] = useState<PanOnScrollMode>(PanOnScrollMode.Vertical);
   // Invert horizontal scroll only
   const [panScrollSpeed, setPanScrollSpeed] = useState<number>(1);
+  // Track if space is held for panning
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
+  // Track shift for constrained movement
+  const [isShiftPressed, setIsShiftPressed] = useState(false);
+  // Track drag start position for constrained movement
+  const dragStartRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const dragAxisRef = useRef<"x" | "y" | null>(null);
 
-  // Handle shift key for horizontal scrolling (with inverted direction)
+  // Undo/Redo history for node positions and sizes
+  type HistoryState = { nodes: Array<{ id: string; position: { x: number; y: number }; width?: number; height?: number }> };
+  const [history, setHistory] = useState<HistoryState[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const isUndoRedoRef = useRef(false);
+  const nodesRef = useRef(nodes);
+  const historyIndexRef = useRef(historyIndex);
+
+  // Keep refs in sync
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
+
+  // Save current state to history (stable function using refs)
+  const saveToHistory = useCallback(() => {
+    if (isUndoRedoRef.current) {
+      isUndoRedoRef.current = false;
+      return;
+    }
+    const currentState: HistoryState = {
+      nodes: nodesRef.current.map((n) => ({
+        id: n.id,
+        position: { ...n.position },
+        width: n.width,
+        height: n.height,
+      })),
+    };
+    setHistory((prev) => {
+      // Remove any future states if we're not at the end
+      const newHistory = prev.slice(0, historyIndexRef.current + 1);
+      newHistory.push(currentState);
+      // Limit history size
+      if (newHistory.length > 50) newHistory.shift();
+      return newHistory;
+    });
+    setHistoryIndex((prev) => Math.min(prev + 1, 49));
+  }, []); // No dependencies - uses refs
+
+  // Undo function
+  const undo = useCallback(() => {
+    if (historyIndex <= 0) return;
+    isUndoRedoRef.current = true;
+    const prevState = history[historyIndex - 1];
+    if (prevState) {
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          const saved = prevState.nodes.find((n) => n.id === node.id);
+          if (saved) {
+            return {
+              ...node,
+              position: saved.position,
+              width: saved.width,
+              height: saved.height,
+            };
+          }
+          return node;
+        })
+      );
+      setHistoryIndex(historyIndex - 1);
+    }
+  }, [history, historyIndex, setNodes]);
+
+  // Redo function
+  const redo = useCallback(() => {
+    if (historyIndex >= history.length - 1) return;
+    isUndoRedoRef.current = true;
+    const nextState = history[historyIndex + 1];
+    if (nextState) {
+      setNodes((currentNodes) =>
+        currentNodes.map((node) => {
+          const saved = nextState.nodes.find((n) => n.id === node.id);
+          if (saved) {
+            return {
+              ...node,
+              position: saved.position,
+              width: saved.width,
+              height: saved.height,
+            };
+          }
+          return node;
+        })
+      );
+      setHistoryIndex(historyIndex + 1);
+    }
+  }, [history, historyIndex, setNodes]);
+
+  // Handle keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Track modifier keys
       if (e.key === "Shift") {
         setPanScrollMode(PanOnScrollMode.Horizontal);
-        setPanScrollSpeed(-1); // Invert for horizontal
+        setPanScrollSpeed(-1);
+        setIsShiftPressed(true);
+      }
+      if (e.key === " " || e.code === "Space") {
+        // Prevent space from scrolling the page
+        if (e.target === document.body || (e.target as HTMLElement)?.closest?.(".react-flow")) {
+          e.preventDefault();
+          setIsSpacePressed(true);
+        }
+      }
+
+      // Don't handle shortcuts if typing in an input
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+        return;
+      }
+
+      const isMod = e.ctrlKey || e.metaKey;
+
+      // Ctrl/Cmd + Z = Undo
+      if (isMod && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+        return;
+      }
+
+      // Ctrl/Cmd + Shift + Z = Redo
+      if (isMod && e.key === "z" && e.shiftKey) {
+        e.preventDefault();
+        redo();
+        return;
+      }
+
+      // Ctrl/Cmd + 0 = Fit view
+      if (isMod && (e.key === "0" || e.code === "Digit0")) {
+        e.preventDefault();
+        fitView({ duration: 300 });
+        return;
+      }
+
+      // Ctrl/Cmd + = or + = Zoom in
+      if (isMod && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        zoomIn({ duration: 200 });
+        return;
+      }
+
+      // Ctrl/Cmd + - = Zoom out
+      if (isMod && e.key === "-") {
+        e.preventDefault();
+        zoomOut({ duration: 200 });
+        return;
+      }
+
+      // Ctrl/Cmd + A = Select all
+      if (isMod && e.key === "a") {
+        e.preventDefault();
+        setNodes((nds) => nds.map((n) => ({ ...n, selected: true })));
+        return;
+      }
+
+      // Escape = Clear selection / cancel reply
+      if (e.key === "Escape") {
+        setNodes((nds) => nds.map((n) => ({ ...n, selected: false })));
+        setReplyingTo(null);
+        return;
+      }
+
+      // Delete / Backspace = Delete selected nodes
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const selectedNodes = nodes.filter((n) => n.selected);
+        if (selectedNodes.length > 0) {
+          e.preventDefault();
+          // Delete each selected message
+          for (const node of selectedNodes) {
+            deleteMessage(node.id).catch(console.error);
+          }
+        }
+        return;
+      }
+
+      // Arrow keys = Nudge selected nodes
+      const arrowKeys = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+      if (arrowKeys.includes(e.key)) {
+        const selectedNodes = nodes.filter((n) => n.selected);
+        if (selectedNodes.length > 0) {
+          e.preventDefault();
+          const nudgeAmount = e.shiftKey ? 20 : 5; // Shift = faster nudge
+          const delta = { x: 0, y: 0 };
+          
+          switch (e.key) {
+            case "ArrowUp": delta.y = -nudgeAmount; break;
+            case "ArrowDown": delta.y = nudgeAmount; break;
+            case "ArrowLeft": delta.x = -nudgeAmount; break;
+            case "ArrowRight": delta.x = nudgeAmount; break;
+          }
+
+          setNodes((nds) =>
+            nds.map((n) =>
+              n.selected
+                ? { ...n, position: { x: n.position.x + delta.x, y: n.position.y + delta.y } }
+                : n
+            )
+          );
+        }
+        return;
       }
     };
+
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === "Shift") {
         setPanScrollMode(PanOnScrollMode.Vertical);
-        setPanScrollSpeed(1); // Normal for vertical
+        setPanScrollSpeed(1);
+        setIsShiftPressed(false);
+        // Clear constrained axis when shift is released
+        dragAxisRef.current = null;
+      }
+      if (e.key === " " || e.code === "Space") {
+        setIsSpacePressed(false);
       }
     };
 
@@ -172,7 +380,79 @@ function FlowCanvas() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, []);
+  }, [nodes, undo, redo, fitView, zoomIn, zoomOut, setNodes, deleteMessage]);
+
+  // Custom node change handler for constrained movement and history
+  const handleNodesChange = useCallback(
+    (changes: Parameters<typeof onNodesChange>[0]) => {
+      // Check if any change is a position change (drag)
+      const positionChanges = changes.filter(
+        (c) => c.type === "position" && c.dragging !== undefined
+      );
+
+      // Handle constrained movement with Shift
+      if (isShiftPressed && positionChanges.length > 0) {
+        const modifiedChanges = changes.map((change) => {
+          if (change.type === "position" && change.position) {
+            const nodeId = change.id;
+            
+            // On drag start, save initial position
+            if (change.dragging && !dragStartRef.current.has(nodeId)) {
+              const node = nodes.find((n) => n.id === nodeId);
+              if (node) {
+                dragStartRef.current.set(nodeId, { ...node.position });
+              }
+            }
+
+            const startPos = dragStartRef.current.get(nodeId);
+            if (startPos && change.position) {
+              const dx = Math.abs(change.position.x - startPos.x);
+              const dy = Math.abs(change.position.y - startPos.y);
+
+              // Determine axis on first significant movement
+              if (!dragAxisRef.current && (dx > 5 || dy > 5)) {
+                dragAxisRef.current = dx > dy ? "x" : "y";
+              }
+
+              // Constrain to axis
+              if (dragAxisRef.current === "x") {
+                change.position.y = startPos.y;
+              } else if (dragAxisRef.current === "y") {
+                change.position.x = startPos.x;
+              }
+            }
+
+            // On drag end, clear start position
+            if (!change.dragging) {
+              dragStartRef.current.delete(nodeId);
+              dragAxisRef.current = null;
+            }
+          }
+          return change;
+        });
+        onNodesChange(modifiedChanges);
+      } else {
+        // Clear drag refs if shift not pressed
+        if (positionChanges.some((c) => c.type === "position" && !("dragging" in c && c.dragging))) {
+          dragStartRef.current.clear();
+          dragAxisRef.current = null;
+        }
+        onNodesChange(changes);
+      }
+
+      // Save to history on drag end or resize end
+      const hasEnded = changes.some(
+        (c) =>
+          (c.type === "position" && "dragging" in c && c.dragging === false) ||
+          (c.type === "dimensions" && "resizing" in c && c.resizing === false)
+      );
+      if (hasEnded) {
+        // Delay slightly to ensure state is updated
+        setTimeout(saveToHistory, 0);
+      }
+    },
+    [onNodesChange, isShiftPressed, nodes, saveToHistory]
+  );
 
   // Merge database messages with streaming state
   const messages: DisplayMessage[] = useMemo(() => {
@@ -186,11 +466,10 @@ function FlowCanvas() {
         ...msg,
         content: streaming?.content ?? msg.content,
         isStreaming: streaming?.isStreaming ?? false,
-        isCollapsed: collapsedNodes.has(msg.id),
         branchReferences: branchRefs,
       };
     });
-  }, [dbMessages, streamingMessages, collapsedNodes, references]);
+  }, [dbMessages, streamingMessages, references]);
 
   // Generate short labels and tree info for all messages
   const { labels: shortLabels, treeLabels, treeIndices } = useMemo(
@@ -205,18 +484,24 @@ function FlowCanvas() {
     return map;
   }, [messages]);
 
-  // Handle toggle collapse
-  const handleToggleCollapse = useCallback((nodeId: string) => {
-    setCollapsedNodes((prev) => {
-      const next = new Set(prev);
-      if (next.has(nodeId)) {
-        next.delete(nodeId);
-      } else {
-        next.add(nodeId);
-      }
-      return next;
-    });
-  }, []);
+  // Handle reset node to default size
+  const handleResetSize = useCallback((nodeId: string) => {
+    setNodes((currentNodes) =>
+      currentNodes.map((node) => {
+        if (node.id === nodeId) {
+          const dims = getNodeDimensions(node);
+          return {
+            ...node,
+            width: dims.width,
+            height: dims.height,
+          };
+        }
+        return node;
+      })
+    );
+    // Save to history after reset
+    setTimeout(saveToHistory, 0);
+  }, [setNodes, saveToHistory]);
 
   // Convert messages to ReactFlow nodes and edges
   useEffect(() => {
@@ -271,7 +556,7 @@ function FlowCanvas() {
             msg.role === "user" && isLastInBranch(messages, msg.id)
               ? handleEdit
               : undefined,
-          onToggleCollapse: () => handleToggleCollapse(msg.id),
+          onResetSize: handleResetSize,
         },
       };
     });
@@ -345,7 +630,7 @@ function FlowCanvas() {
     setNodes,
     setEdges,
     setCenter,
-    handleToggleCollapse,
+    handleResetSize,
   ]);
 
   // Handle edit (delete subtree and prepare for re-entry)
@@ -702,7 +987,7 @@ function FlowCanvas() {
           <ReactFlow
             nodes={nodes}
             edges={edges}
-            onNodesChange={onNodesChange}
+            onNodesChange={handleNodesChange}
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
@@ -719,14 +1004,17 @@ function FlowCanvas() {
             panOnScroll={true}
             panOnScrollMode={panScrollMode}
             panOnScrollSpeed={panScrollSpeed}
-            // Left drag = pan canvas
-            panOnDrag={true}
+            // Left drag on empty space = pan, OR space+drag = pan, OR middle mouse = pan
+            panOnDrag={isSpacePressed ? true : [1, 2]}
+            panActivationKeyCode="Space"
             // Ctrl + left drag = selection
             selectionOnDrag={false}
             selectionKeyCode="Control"
             selectionMode={SelectionMode.Partial}
             // Disable zoom on double click
             zoomOnDoubleClick={false}
+            // Don't delete nodes on backspace (we handle it ourselves)
+            deleteKeyCode={null}
           >
             <Background color="#e5e7eb" gap={20} />
             <Controls className="bg-white! border-gray-200! shadow-sm!" />
