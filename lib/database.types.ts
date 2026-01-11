@@ -158,6 +158,57 @@ export type Database = {
           }
         ];
       };
+      node_positions: {
+        Row: {
+          id: string;
+          conversation_id: string;
+          message_id: string;
+          x: number;
+          y: number;
+          width: number | null;
+          height: number | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          conversation_id: string;
+          message_id: string;
+          x: number;
+          y: number;
+          width?: number | null;
+          height?: number | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          conversation_id?: string;
+          message_id?: string;
+          x?: number;
+          y?: number;
+          width?: number | null;
+          height?: number | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "node_positions_conversation_id_fkey";
+            columns: ["conversation_id"];
+            isOneToOne: false;
+            referencedRelation: "conversations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "node_positions_message_id_fkey";
+            columns: ["message_id"];
+            isOneToOne: false;
+            referencedRelation: "messages";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
     };
     Views: {};
     Functions: {
@@ -191,3 +242,5 @@ export type MessageInsert = Database["public"]["Tables"]["messages"]["Insert"];
 export type MessageReference = Database["public"]["Tables"]["message_references"]["Row"];
 export type MessageReferenceInsert = Database["public"]["Tables"]["message_references"]["Insert"];
 export type MessageAttachment = Database["public"]["Tables"]["message_attachments"]["Row"];
+export type NodePosition = Database["public"]["Tables"]["node_positions"]["Row"];
+export type NodePositionInsert = Database["public"]["Tables"]["node_positions"]["Insert"];

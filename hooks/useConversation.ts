@@ -1,9 +1,16 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { createClient } from "@/utils/supabase/client";
 import type { Message, Conversation, MessageReference } from "@/lib/database.types";
 import type { RealtimeChannel } from "@supabase/supabase-js";
+
+export type NodePositionData = {
+  x: number;
+  y: number;
+  width?: number;
+  height?: number;
+};
 
 export type ConversationWithMessages = {
   conversation: Conversation;
@@ -15,8 +22,13 @@ export function useConversation(conversationId: string | null) {
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [references, setReferences] = useState<{ source_message_id: string; target_message_id: string }[]>([]);
+  const [nodePositions, setNodePositions] = useState<Record<string, NodePositionData>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Debounce timer for saving positions
+  const savePositionsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingPositionsRef = useRef<Record<string, NodePositionData>>({});
 
   const supabase = createClient();
 
@@ -26,6 +38,7 @@ export function useConversation(conversationId: string | null) {
       setConversation(null);
       setMessages([]);
       setReferences([]);
+      setNodePositions({});
       setIsLoading(false);
       return;
     }
@@ -34,6 +47,7 @@ export function useConversation(conversationId: string | null) {
     setError(null);
 
     try {
+      // Load conversation and messages
       const response = await fetch(`/api/conversations/${conversationId}`);
       if (!response.ok) {
         throw new Error("Failed to load conversation");
@@ -43,6 +57,13 @@ export function useConversation(conversationId: string | null) {
       setConversation(data.conversation);
       setMessages(data.messages);
       setReferences(data.references);
+
+      // Load node positions
+      const posResponse = await fetch(`/api/node-positions?conversation_id=${conversationId}`);
+      if (posResponse.ok) {
+        const positions = await posResponse.json();
+        setNodePositions(positions);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -214,16 +235,75 @@ export function useConversation(conversationId: string | null) {
     return response.json();
   }, []);
 
+  // Save node positions (debounced to avoid too many API calls)
+  const saveNodePositions = useCallback(
+    (positions: Record<string, NodePositionData>) => {
+      if (!conversationId) return;
+
+      // Merge with pending positions
+      pendingPositionsRef.current = { ...pendingPositionsRef.current, ...positions };
+
+      // Clear existing timeout
+      if (savePositionsTimeoutRef.current) {
+        clearTimeout(savePositionsTimeoutRef.current);
+      }
+
+      // Debounce save by 500ms
+      savePositionsTimeoutRef.current = setTimeout(async () => {
+        const positionsToSave = pendingPositionsRef.current;
+        pendingPositionsRef.current = {};
+
+        const positionsArray = Object.entries(positionsToSave).map(([message_id, pos]) => ({
+          message_id,
+          x: pos.x,
+          y: pos.y,
+          width: pos.width,
+          height: pos.height,
+        }));
+
+        if (positionsArray.length === 0) return;
+
+        try {
+          await fetch("/api/node-positions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              conversation_id: conversationId,
+              positions: positionsArray,
+            }),
+          });
+
+          // Update local state
+          setNodePositions((prev) => ({ ...prev, ...positionsToSave }));
+        } catch (error) {
+          console.error("Failed to save node positions:", error);
+        }
+      }, 500);
+    },
+    [conversationId]
+  );
+
+  // Cleanup timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (savePositionsTimeoutRef.current) {
+        clearTimeout(savePositionsTimeoutRef.current);
+      }
+    };
+  }, []);
+
   return {
     conversation,
     messages,
     references,
+    nodePositions,
     isLoading,
     error,
     addMessage,
     updateMessage,
     deleteMessage,
     getContext,
+    saveNodePositions,
     reload: loadConversation,
   };
 }

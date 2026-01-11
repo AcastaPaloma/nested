@@ -166,6 +166,10 @@ export function ConversationSidebar({
                 ) : (
                   <div
                     onClick={() => onSelect(conv.id)}
+                    onDoubleClick={(e) => {
+                      e.stopPropagation();
+                      handleStartRename(conv);
+                    }}
                     className="w-full text-left p-3 cursor-pointer"
                   >
                     <div className="flex items-center justify-between">
