@@ -26,6 +26,9 @@ export function useConversation(conversationId: string | null) {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Track previous conversation ID to detect switches
+  const prevConversationIdRef = useRef<string | null>(null);
+
   // Debounce timer for saving positions
   const savePositionsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingPositionsRef = useRef<Record<string, NodePositionData>>({});
@@ -68,6 +71,19 @@ export function useConversation(conversationId: string | null) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setIsLoading(false);
+    }
+  }, [conversationId]);
+
+  // Clear state immediately when conversation ID changes (before loading new data)
+  useEffect(() => {
+    if (prevConversationIdRef.current !== conversationId) {
+      // Conversation changed - clear old state immediately
+      setConversation(null);
+      setMessages([]);
+      setReferences([]);
+      setNodePositions({});
+      setError(null);
+      prevConversationIdRef.current = conversationId;
     }
   }, [conversationId]);
 

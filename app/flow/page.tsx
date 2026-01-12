@@ -120,6 +120,19 @@ function FlowCanvas() {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [showSidebar, setShowSidebar] = useState(true);
 
+  // Auto-load the most recent conversation on initial load
+  useEffect(() => {
+    if (!currentConversationId && conversations.length > 0) {
+      // Sort by updated_at or created_at descending and pick the first one
+      const sortedConversations = [...conversations].sort((a, b) => {
+        const dateA = new Date(a.updated_at || a.created_at).getTime();
+        const dateB = new Date(b.updated_at || b.created_at).getTime();
+        return dateB - dateA;
+      });
+      setCurrentConversationId(sortedConversations[0].id);
+    }
+  }, [conversations, currentConversationId]);
+
   const {
     conversation,
     messages: dbMessages,
@@ -147,6 +160,23 @@ function FlowCanvas() {
   const lastNodeIdRef = useRef<string | null>(null);
   const hasInitialLayoutRef = useRef(false);
   const prevMessageCountRef = useRef(0);
+  const prevConversationIdRef = useRef<string | null>(null);
+
+  // Clear local state when conversation changes
+  useEffect(() => {
+    if (prevConversationIdRef.current !== currentConversationId) {
+      // Conversation changed - clear all local state immediately
+      setNodes([]);
+      setEdges([]);
+      setStreamingMessages(new Map());
+      setCollapsedNodes(new Set());
+      setReplyingTo(null);
+      setCircularWarning(null);
+      hasInitialLayoutRef.current = false;
+      prevMessageCountRef.current = 0;
+      prevConversationIdRef.current = currentConversationId;
+    }
+  }, [currentConversationId, setNodes, setEdges]);
 
   // Wrapped onNodesChange handler that saves positions when nodes are moved or resized
   const handleNodesChange = useCallback(
@@ -270,11 +300,21 @@ function FlowCanvas() {
       return;
     }
 
+    // Guard: if messages are from a different conversation, don't render them
+    // This can happen during conversation switches due to async timing
+    if (dbMessages.length > 0 && dbMessages[0].conversation_id !== currentConversationId) {
+      setNodes([]);
+      setEdges([]);
+      return;
+    }
+
     const messageCountChanged = messages.length !== prevMessageCountRef.current;
     // Check if we have saved positions for existing messages
     const hasSavedPositions = Object.keys(nodePositions).length > 0;
-    // Only need layout if new messages OR first load without saved positions
-    const needsLayout = (messageCountChanged && messages.length > Object.keys(nodePositions).length) || (!hasInitialLayoutRef.current && !hasSavedPositions);
+    // Check if any message is missing a saved position
+    const hasNewMessagesWithoutPositions = messages.some((m) => !nodePositions[m.id]);
+    // Only need layout if new messages without positions OR first load without saved positions
+    const needsLayout = (messageCountChanged && hasNewMessagesWithoutPositions) || (!hasInitialLayoutRef.current && !hasSavedPositions);
     prevMessageCountRef.current = messages.length;
 
     const newNodes: Node<FlowNodeData>[] = messages.map((msg) => {
@@ -294,12 +334,13 @@ function FlowCanvas() {
         id: msg.id,
         type: msg.role === "user" ? "user" : "agent",
         position: savedPos ? { x: savedPos.x, y: savedPos.y } : { x: 0, y: 0 },
-        // Apply saved width/height if available
-        ...(savedPos?.width && savedPos?.height ? {
-          width: savedPos.width,
-          height: savedPos.height,
-          style: { width: savedPos.width, height: savedPos.height }
-        } : {}),
+        // Apply saved dimensions if available, otherwise use defaults
+        width: savedPos?.width ?? 320,
+        height: savedPos?.height ?? 120,
+        style: {
+          width: savedPos?.width ?? 320,
+          height: savedPos?.height ?? 120
+        },
         data: {
           message: {
             id: msg.id,
@@ -380,32 +421,87 @@ function FlowCanvas() {
 
       hasInitialLayoutRef.current = true;
 
-      if (lastNodeIdRef.current && messageCountChanged) {
-        const allNodes = newNodes;
-        const pos = getZoomPosition(allNodes, lastNodeIdRef.current);
-        if (pos) {
-          setTimeout(() => {
-            setCenter(pos.x, pos.y, { zoom: pos.zoom, duration: 300 });
-          }, 50);
-        }
-        lastNodeIdRef.current = null;
-      }
+      // Clear the lastNodeIdRef without panning
+      lastNodeIdRef.current = null;
     } else if (!hasInitialLayoutRef.current && hasSavedPositions) {
       // First load with saved positions - use them directly
       setNodes(newNodes);
       setEdges(newEdges);
       hasInitialLayoutRef.current = true;
     } else {
-      setNodes((currentNodes) =>
-        currentNodes.map((node) => {
+      // Check if there are new nodes that need to be added
+      setNodes((currentNodes) => {
+        const currentNodeIds = new Set(currentNodes.map((n) => n.id));
+        const currentNodesMap = new Map(currentNodes.map((n) => [n.id, n]));
+        const newNodesToAdd = newNodes.filter((n) => !currentNodeIds.has(n.id));
+
+        if (newNodesToAdd.length > 0) {
+          // Position new nodes relative to their parents
+          // We need to process them in order and build up a map that includes newly positioned nodes
+          const positionedNodesMap = new Map(currentNodesMap);
+          const positionedNewNodes: typeof newNodesToAdd = [];
+
+          for (const node of newNodesToAdd) {
+            const parentId = messages.find((m) => m.id === node.id)?.parent_id;
+            const parentNode = parentId ? positionedNodesMap.get(parentId) : null;
+
+            let positionedNode;
+            if (parentNode) {
+              // Position below parent with some offset
+              // Count siblings to offset horizontally
+              const siblings = messages.filter((m) => m.parent_id === parentId);
+              const siblingIndex = siblings.findIndex((m) => m.id === node.id);
+              const horizontalOffset = siblingIndex * 350;
+
+              positionedNode = {
+                ...node,
+                position: {
+                  x: parentNode.position.x + horizontalOffset,
+                  y: parentNode.position.y + 200,
+                },
+              };
+            } else {
+              // If no parent, place to the right of existing nodes
+              let maxX = 0;
+              for (const n of positionedNodesMap.values()) {
+                maxX = Math.max(maxX, n.position.x + (n.width ?? 320));
+              }
+              positionedNode = {
+                ...node,
+                position: { x: maxX + 150, y: 0 },
+              };
+            }
+
+            // Add to map so subsequent nodes can reference it
+            positionedNodesMap.set(positionedNode.id, positionedNode);
+            positionedNewNodes.push(positionedNode);
+          }
+
+          // Update existing nodes with new data
+          const updatedExisting = currentNodes.map((node) => {
+            const newNode = newNodes.find((n) => n.id === node.id);
+            if (newNode) {
+              return { ...node, data: newNode.data };
+            }
+            return node;
+          });
+
+          return [...updatedExisting, ...positionedNewNodes];
+        }
+
+        // Just update existing nodes' data
+        return currentNodes.map((node) => {
           const newNode = newNodes.find((n) => n.id === node.id);
           if (newNode) {
             return { ...node, data: newNode.data };
           }
           return node;
-        })
-      );
+        });
+      });
       setEdges(newEdges);
+
+      // Clear the lastNodeIdRef without panning
+      lastNodeIdRef.current = null;
     }
   }, [
     currentConversationId,
@@ -418,7 +514,6 @@ function FlowCanvas() {
     messagesById,
     setNodes,
     setEdges,
-    setCenter,
     handleToggleCollapse,
   ]);
 

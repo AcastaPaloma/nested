@@ -93,28 +93,8 @@ export type CanvasState = {
   updatedAt: number;
 };
 
-// Helper to generate unique IDs
-export function createId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
-  }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-// Get the root node ID for any message in a tree
-export function getRootId<T extends MessageLike>(
-  messagesById: Map<string, T>,
-  nodeId: string
-): string {
-  let current = messagesById.get(nodeId);
-  while (current && getParentId(current)) {
-    current = messagesById.get(getParentId(current)!);
-  }
-  return current?.id ?? nodeId;
-}
-
-// Get all nodes in a tree
-export function getTreeNodes<T extends MessageLike>(
+// Get all nodes in a tree (internal helper)
+function getTreeNodes<T extends MessageLike>(
   messages: T[],
   rootId: string
 ): T[] {
@@ -189,8 +169,8 @@ export function generateShortLabels<T extends MessageLike>(
   return { labels, treeLabels, treeIndices };
 }
 
-// Get all ancestors of a message (for context aggregation)
-export function getAncestry<T extends MessageLike>(
+// Get all ancestors of a message (internal helper)
+function getAncestry<T extends MessageLike>(
   messagesById: Map<string, T>,
   nodeId: string
 ): T[] {
@@ -207,47 +187,6 @@ export function getAncestry<T extends MessageLike>(
 
   chain.reverse();
   return chain;
-}
-
-// Aggregate context for a request: ancestry + entire referenced branches
-export function aggregateContext<T extends MessageLike>(
-  messages: T[],
-  messagesById: Map<string, T>,
-  nodeId: string,
-  branchReferences: string[] // These are ROOT node IDs
-): { messages: T[]; circularWarning: string | null } {
-  const visited = new Set<string>();
-  const allMessages: T[] = [];
-  let circularWarning: string | null = null;
-
-  // Helper to add messages without duplicates
-  const addMessages = (msgs: T[], isReference: boolean) => {
-    for (const msg of msgs) {
-      if (visited.has(msg.id)) {
-        if (isReference) {
-          circularWarning = `Some messages already in context`;
-        }
-        continue;
-      }
-      visited.add(msg.id);
-      allMessages.push(msg);
-    }
-  };
-
-  // First, add the main ancestry (reply chain)
-  const ancestry = getAncestry(messagesById, nodeId);
-  addMessages(ancestry, false);
-
-  // Then add entire referenced branches
-  for (const branchRootId of branchReferences) {
-    const branchNodes = getTreeNodes(messages, branchRootId);
-    addMessages(branchNodes, true);
-  }
-
-  // Sort by creation time for proper conversation order
-  allMessages.sort((a, b) => getCreatedAt(a) - getCreatedAt(b));
-
-  return { messages: allMessages, circularWarning };
 }
 
 // Detect if adding an edge would create a circular reference
@@ -269,19 +208,3 @@ export function isLastInBranch<T extends MessageLike>(
   return !messages.some((m) => getParentId(m) === nodeId);
 }
 
-// Delete a subtree (for edit functionality)
-export function deleteSubtree<T extends MessageLike>(
-  messages: T[],
-  nodeId: string
-): T[] {
-  const toDelete = new Set<string>();
-
-  const collectDescendants = (id: string) => {
-    toDelete.add(id);
-    const children = messages.filter((m) => getParentId(m) === id);
-    children.forEach((c) => collectDescendants(c.id));
-  };
-
-  collectDescendants(nodeId);
-  return messages.filter((m) => !toDelete.has(m.id));
-}

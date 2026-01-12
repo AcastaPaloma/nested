@@ -19,7 +19,7 @@ import type { FlowNodeData, TreePalette } from "../types";
 // Markdown renderer component with proper styling and LaTeX support
 function MarkdownContent({ content }: { content: string }) {
   return (
-    <div className="prose prose-sm max-w-none break-words" style={{ fontFamily: 'var(--font-dotgothic16)' }}>
+    <div className="prose prose-sm max-w-none wrap-break-word" style={{ fontFamily: 'var(--font-dotgothic16)' }}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
@@ -167,8 +167,8 @@ export const UserNode = memo(function UserNode({
     <div
       className={`rounded-lg border shadow-sm transition-all duration-200 ${palette.bg} ${palette.border} ${
         selected ? `ring-2 ${palette.ring}` : ""
-      } w-full h-full flex flex-col`}
-      style={{ minWidth: 280, maxWidth: 350, minHeight: isCollapsed ? 60 : 100, maxHeight: isCollapsed ? 80 : 250 }}
+      } flex flex-col w-full h-full`}
+      style={{ minWidth: 220, minHeight: isCollapsed ? 60 : 100 }}
       onMouseEnter={() => isRoot && setShowPreview(true)}
       onMouseLeave={() => setShowPreview(false)}
     >
@@ -242,7 +242,7 @@ export const UserNode = memo(function UserNode({
       {isCollapsed ? (
         <CollapsedContent content={message.content} palette={palette} />
       ) : (
-        <div className="px-3 py-2 overflow-auto flex-1">
+        <div className="px-3 py-2 overflow-hidden flex-1 min-h-0">
           <MarkdownContent content={message.content} />
           {message.branchReferences.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
@@ -351,8 +351,8 @@ export const AgentNode = memo(function AgentNode({
     <div
       className={`rounded-lg border shadow-sm transition-all duration-200 ${palette.bg} ${palette.border} ${
         selected ? `ring-2 ${palette.ring}` : ""
-      } w-full h-full flex flex-col`}
-      style={{ minWidth: 280, maxWidth: 350, minHeight: isCollapsed ? 60 : 100, maxHeight: isCollapsed ? 80 : 300 }}
+      } flex flex-col w-full h-full`}
+      style={{ minWidth: 220, minHeight: isCollapsed ? 60 : 100 }}
     >
       {/* Always visible resize handle */}
       <NodeResizer
@@ -407,7 +407,7 @@ export const AgentNode = memo(function AgentNode({
       {isCollapsed ? (
         <CollapsedContent content={message.content} palette={palette} />
       ) : (
-        <div className="px-3 py-2 overflow-auto flex-1">
+        <div className="px-3 py-2 overflow-hidden flex-1 min-h-0">
           <MarkdownContent content={message.content} />
         </div>
       )}

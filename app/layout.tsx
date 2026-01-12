@@ -1,10 +1,16 @@
 import type { Metadata } from "next";
-import { DotGothic16 } from "next/font/google";
+import { DotGothic16, Major_Mono_Display } from "next/font/google";
 import "./globals.css";
 
 const dotGothic16 = DotGothic16({
   weight: "400",
   variable: "--font-dotgothic16",
+  subsets: ["latin"],
+});
+
+const majorMonoDisplay = Major_Mono_Display({
+  weight: "400",
+  variable: "--font-majormonodisplay",
   subsets: ["latin"],
 });
 
@@ -21,7 +27,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${dotGothic16.variable} antialiased`}
+        className={`${dotGothic16.variable} ${majorMonoDisplay.variable} antialiased`}
         style={{ fontFamily: 'Helvetica, Arial, sans-serif' }}
       >
         {children}
