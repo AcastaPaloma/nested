@@ -412,3 +412,81 @@ export function useConversations() {
     reload: loadConversations,
   };
 }
+
+// Canvas type for listing
+export interface Canvas {
+  id: string;
+  name: string;
+  description?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Hook to manage canvases list
+export function useCanvases() {
+  const [canvases, setCanvases] = useState<Canvas[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadCanvases = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/canvases");
+      if (!response.ok) {
+        throw new Error("Failed to load canvases");
+      }
+
+      const data = await response.json();
+      setCanvases(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadCanvases();
+  }, [loadCanvases]);
+
+  const createCanvas = useCallback(async (name?: string) => {
+    const response = await fetch("/api/canvases", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name || "Untitled Canvas" }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || "Failed to create canvas");
+    }
+
+    const canvas = await response.json();
+    setCanvases((prev) => [canvas, ...prev]);
+    return canvas as Canvas;
+  }, []);
+
+  const deleteCanvas = useCallback(async (id: string) => {
+    const response = await fetch(`/api/canvases/${id}`, {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || "Failed to delete canvas");
+    }
+
+    setCanvases((prev) => prev.filter((c) => c.id !== id));
+  }, []);
+
+  return {
+    canvases,
+    isLoading,
+    error,
+    createCanvas,
+    deleteCanvas,
+    reload: loadCanvases,
+  };
+}

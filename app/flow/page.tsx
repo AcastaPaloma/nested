@@ -21,6 +21,8 @@ import { nodeTypes } from "./components/Nodes";
 import { edgeTypes } from "./components/Edges";
 import { InputBar } from "./components/InputBar";
 import { ConversationSidebar } from "./components/ConversationSidebar";
+import { CanvasToolbar } from "./components/CanvasToolbar";
+import { ContextLens } from "./components/ContextLens";
 import { getLayoutedElements, getZoomPosition } from "./dagre-layout";
 import {
   type FlowNodeData,
@@ -148,6 +150,8 @@ function FlowCanvas() {
   // Local streaming state (for messages being streamed)
   const [streamingMessages, setStreamingMessages] = useState<Map<string, { content: string; isStreaming: boolean }>>(new Map());
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+  const [contextLensOpen, setContextLensOpen] = useState(false);
+  const [excludedNodes, setExcludedNodes] = useState<Set<string>>(new Set());
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<FlowNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge<FlowEdgeData>>([]);
@@ -156,11 +160,12 @@ function FlowCanvas() {
   const [circularWarning, setCircularWarning] = useState<string | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<ModelProvider>("gemini");
   const [selectedModel, setSelectedModel] = useState<string>("gemini-2.5-flash-lite");
-  const { setCenter } = useReactFlow();
+  const { setCenter, zoomIn, zoomOut, fitView, getZoom } = useReactFlow();
   const lastNodeIdRef = useRef<string | null>(null);
   const hasInitialLayoutRef = useRef(false);
   const prevMessageCountRef = useRef(0);
   const prevConversationIdRef = useRef<string | null>(null);
+  const [currentZoom, setCurrentZoom] = useState(1);
 
   // Clear local state when conversation changes
   useEffect(() => {
@@ -170,6 +175,7 @@ function FlowCanvas() {
       setEdges([]);
       setStreamingMessages(new Map());
       setCollapsedNodes(new Set());
+      setExcludedNodes(new Set());
       setReplyingTo(null);
       setCircularWarning(null);
       hasInitialLayoutRef.current = false;
@@ -704,10 +710,16 @@ function FlowCanvas() {
           (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
         );
 
-        // Call LLM
+        // CONTEXT LENS ENFORCEMENT: Filter out excluded nodes before sending to LLM
+        // The new user message is never excluded (user just typed it)
+        const filteredContextMessages = contextMessages.filter(
+          (m) => m.id === userMsg.id || !excludedNodes.has(m.id)
+        );
+
+        // Call LLM with filtered context
         const llmText = await callLLM(
           {
-            messages: contextMessages.map((m) => ({
+            messages: filteredContextMessages.map((m) => ({
               role: m.role,
               content: m.content,
             })),
@@ -749,6 +761,7 @@ function FlowCanvas() {
       replyingTo,
       messagesById,
       treeLabels,
+      excludedNodes,
       selectedProvider,
       selectedModel,
       addMessage,
@@ -770,6 +783,49 @@ function FlowCanvas() {
     }
   }, [createConversation]);
 
+  // Handle creating a new branch (start a new root message)
+  const handleNewBranch = useCallback(() => {
+    setReplyingTo(null);
+  }, []);
+
+  // Context Lens node toggles
+  const handleToggleContextNode = useCallback((nodeId: string) => {
+    setExcludedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) {
+        next.delete(nodeId);
+      } else {
+        next.add(nodeId);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleIncludeAllNodes = useCallback(() => {
+    setExcludedNodes(new Set());
+  }, []);
+
+  const handleExcludeAllNodes = useCallback(() => {
+    setExcludedNodes(new Set(messages.map((m) => m.id)));
+  }, [messages]);
+
+  // Context Lens nodes data
+  const contextLensNodes = useMemo(() => {
+    return messages.map((msg) => ({
+      id: msg.id,
+      label: shortLabels.get(msg.id) ?? "?",
+      content: msg.content,
+      role: msg.role,
+      isIncluded: !excludedNodes.has(msg.id),
+      treeLabel: treeLabels.get(msg.id) ?? "?",
+      treeIndex: treeIndices.get(msg.id) ?? 0,
+      isRoot: !msg.parent_id,
+    }));
+  }, [messages, shortLabels, treeLabels, treeIndices, excludedNodes]);
+
+  // Get selected nodes count
+  const selectedNodesCount = nodes.filter((n) => n.selected).length;
+
   return (
     <div className="w-screen h-screen bg-white flex">
       {/* Sidebar */}
@@ -788,46 +844,62 @@ function FlowCanvas() {
       )}
 
       {/* Main Content */}
-      <div className="flex-1 relative">
-        {/* Toggle Sidebar Button */}
-        {!showSidebar && (
-          <button
-            onClick={() => setShowSidebar(true)}
-            className="fixed top-4 left-4 z-50 p-2 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-gray-50"
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
-        )}
+      <div className="flex-1 relative flex">
+        <div className="flex-1 relative">
+          {/* Toggle Sidebar Button */}
+          {!showSidebar && (
+            <button
+              onClick={() => setShowSidebar(true)}
+              className="absolute top-4 left-4 z-50 p-2 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-gray-50 transition-colors"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+          )}
 
-        {/* Model Selector */}
-        <div className="fixed top-4 right-4 z-50 flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
-          <select
-            value={selectedProvider}
-            onChange={(e) => {
-              const provider = e.target.value as ModelProvider;
-              setSelectedProvider(provider);
-              setSelectedModel(MODEL_OPTIONS[provider][0]);
-            }}
-            className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-700"
-          >
-            <option value="gemini">Gemini</option>
-            <option value="ollama">Ollama</option>
-          </select>
-          <span className="text-gray-300">|</span>
-          <select
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-600"
-          >
-            {MODEL_OPTIONS[selectedProvider].map((model) => (
-              <option key={model} value={model}>
-                {model}
-              </option>
-            ))}
-          </select>
-        </div>
+          {/* Model Selector - moved to top right */}
+          <div className="absolute top-4 right-4 z-50 flex items-center gap-2 bg-white/95 backdrop-blur-sm border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
+            <select
+              value={selectedProvider}
+              onChange={(e) => {
+                const provider = e.target.value as ModelProvider;
+                setSelectedProvider(provider);
+                setSelectedModel(MODEL_OPTIONS[provider][0]);
+              }}
+              className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-700"
+            >
+              <option value="gemini">Gemini</option>
+              <option value="ollama">Ollama</option>
+            </select>
+            <span className="text-gray-300">|</span>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-600"
+            >
+              {MODEL_OPTIONS[selectedProvider].map((model) => (
+                <option key={model} value={model}>
+                  {model}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Canvas Toolbar */}
+          {currentConversationId && (
+            <CanvasToolbar
+              onZoomIn={() => zoomIn()}
+              onZoomOut={() => zoomOut()}
+              onFitView={() => fitView({ padding: 0.2 })}
+              onToggleContextLens={() => setContextLensOpen((prev) => !prev)}
+              contextLensOpen={contextLensOpen}
+              onNewBranch={handleNewBranch}
+              nodeCount={nodes.length}
+              selectedCount={selectedNodesCount}
+              zoom={currentZoom}
+            />
+          )}
 
         {/* Circular warning */}
         {circularWarning && (
@@ -873,6 +945,7 @@ function FlowCanvas() {
             edges={edges}
             onNodesChange={handleNodesChange}
             onEdgesChange={onEdgesChange}
+            onMove={(_, viewport) => setCurrentZoom(viewport.zoom)}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             fitView
@@ -913,6 +986,20 @@ function FlowCanvas() {
             replyingTo={replyingTo}
             onCancelReply={() => setReplyingTo(null)}
             disabled={isLoading}
+          />
+        )}
+        </div>
+
+        {/* Context Lens Panel */}
+        {contextLensOpen && currentConversationId && (
+          <ContextLens
+            nodes={contextLensNodes}
+            onToggleNode={handleToggleContextNode}
+            onIncludeAll={handleIncludeAllNodes}
+            onExcludeAll={handleExcludeAllNodes}
+            onClose={() => setContextLensOpen(false)}
+            replyingToId={replyingTo}
+            replyingToLabel={replyingTo ? shortLabels.get(replyingTo) ?? null : null}
           />
         )}
       </div>

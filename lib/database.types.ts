@@ -12,6 +12,45 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      builder_canvases: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          description: string;
+          nodes: Json;
+          edges: Json;
+          collaborators: string[];
+          settings: Json;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name?: string;
+          description?: string;
+          nodes?: Json;
+          edges?: Json;
+          collaborators?: string[];
+          settings?: Json;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          name?: string;
+          description?: string;
+          nodes?: Json;
+          edges?: Json;
+          collaborators?: string[];
+          settings?: Json;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       conversations: {
         Row: {
           id: string;
@@ -209,6 +248,74 @@ export type Database = {
           }
         ];
       };
+      build_jobs: {
+        Row: {
+          id: string;
+          canvas_id: string;
+          user_id: string;
+          status: Database["public"]["Enums"]["build_status"];
+          progress: number;
+          canvas_snapshot: Json;
+          config: Json;
+          backboard_assistant_id: string | null;
+          backboard_thread_id: string | null;
+          logs: Json;
+          artifacts: Json | null;
+          error_message: string | null;
+          error_details: Json | null;
+          created_at: string;
+          started_at: string | null;
+          completed_at: string | null;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          canvas_id: string;
+          user_id: string;
+          status?: Database["public"]["Enums"]["build_status"];
+          progress?: number;
+          canvas_snapshot?: Json;
+          config?: Json;
+          backboard_assistant_id?: string | null;
+          backboard_thread_id?: string | null;
+          logs?: Json;
+          artifacts?: Json | null;
+          error_message?: string | null;
+          error_details?: Json | null;
+          created_at?: string;
+          started_at?: string | null;
+          completed_at?: string | null;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          canvas_id?: string;
+          user_id?: string;
+          status?: Database["public"]["Enums"]["build_status"];
+          progress?: number;
+          canvas_snapshot?: Json;
+          config?: Json;
+          backboard_assistant_id?: string | null;
+          backboard_thread_id?: string | null;
+          logs?: Json;
+          artifacts?: Json | null;
+          error_message?: string | null;
+          error_details?: Json | null;
+          created_at?: string;
+          started_at?: string | null;
+          completed_at?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "build_jobs_canvas_id_fkey";
+            columns: ["canvas_id"];
+            isOneToOne: false;
+            referencedRelation: "builder_canvases";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
     };
     Views: {};
     Functions: {
@@ -229,9 +336,55 @@ export type Database = {
         Returns: Database["public"]["Tables"]["messages"]["Row"][];
       };
     };
-    Enums: {};
+    Enums: {
+      build_status: "queued" | "analyzing" | "building" | "complete" | "failed" | "cancelled";
+    };
     CompositeTypes: {};
   };
+};
+
+// Build status type
+export type BuildStatus = Database["public"]["Enums"]["build_status"];
+
+// Build job types
+export type BuildJob = {
+  id: string;
+  canvas_id: string;
+  user_id: string;
+  status: BuildStatus;
+  progress: number;
+  canvas_snapshot: {
+    nodes: unknown[];
+    edges: unknown[];
+    settings: Record<string, unknown>;
+    name: string;
+  };
+  config: {
+    model?: string;
+    provider?: string;
+    options?: Record<string, unknown>;
+  };
+  backboard_assistant_id: string | null;
+  backboard_thread_id: string | null;
+  logs: Array<{
+    timestamp: string;
+    level: "info" | "warn" | "error";
+    message: string;
+  }>;
+  artifacts: {
+    files?: Array<{
+      path: string;
+      content: string;
+      language: string;
+    }>;
+    preview_url?: string;
+  };
+  error_message: string | null;
+  error_details: Record<string, unknown> | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
 };
 
 // Helper types for easier usage
@@ -244,3 +397,5 @@ export type MessageReferenceInsert = Database["public"]["Tables"]["message_refer
 export type MessageAttachment = Database["public"]["Tables"]["message_attachments"]["Row"];
 export type NodePosition = Database["public"]["Tables"]["node_positions"]["Row"];
 export type NodePositionInsert = Database["public"]["Tables"]["node_positions"]["Insert"];
+export type BuilderCanvas = Database["public"]["Tables"]["builder_canvases"]["Row"];
+export type BuilderCanvasInsert = Database["public"]["Tables"]["builder_canvases"]["Insert"];

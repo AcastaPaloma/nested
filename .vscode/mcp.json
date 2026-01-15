@@ -3,6 +3,9 @@
     "supabase": {
       "type": "http",
       "url": "https://mcp.supabase.com/mcp"
+    },
+    "shadcn": {
+      "url": "https://www.shadcn.io/api/mcp"
     }
   }
 }
