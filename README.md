@@ -1,36 +1,114 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Nested
 
-## Getting Started
+Nested is a spatial chat client for Codex. A conversation becomes a board: continue from any agent response, branch an idea without losing the original path, collapse subtrees, and open long responses in a focused reader.
 
-First, run the development server:
+Generation runs through the local [Codex app server](https://developers.openai.com/codex/app-server). Nested reuses your Codex CLI login and never reads or copies your ChatGPT credentials. Supabase provides sign-in and per-user conversation storage.
+
+## What you need
+
+- Node.js 20 or newer
+- npm
+- A ChatGPT account with access to Codex
+- The [Codex CLI](https://developers.openai.com/codex/cli)
+- Either Docker for a local Supabase stack or a hosted [Supabase](https://supabase.com) project
+
+No OpenAI Platform API key is required.
+
+## Download and run
+
+```bash
+git clone https://github.com/AcastaPaloma/nested.git
+cd nested
+npm install
+```
+
+Install Codex if it is not already available, then sign in with your ChatGPT account:
+
+```bash
+npm install -g @openai/codex
+codex login --device-auth
+codex login status
+```
+
+Nested starts `codex app-server` itself when the first response is requested. You do not need to run a second Codex process.
+
+### Option A: local Supabase
+
+Docker must be running.
+
+```bash
+npx supabase start
+cp .env.example .env.local
+```
+
+`supabase start` prints the local API URL and publishable/anon key. Copy those values into `.env.local` if they differ from the example, then start Nested:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000), create a Nested account, and start a board. Local confirmation emails appear in Mailpit at [http://127.0.0.1:54324](http://127.0.0.1:54324).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Option B: hosted Supabase
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Create a Supabase project.
+2. Install the Supabase CLI, or use it through `npx`.
+3. Link this checkout and apply the included migrations:
 
-## Learn More
+```bash
+npx supabase login
+npx supabase link --project-ref YOUR_PROJECT_REF
+npx supabase db push
+```
 
-To learn more about Next.js, take a look at the following resources:
+4. In Supabase Authentication settings, add `http://localhost:3000/auth/confirm` as a redirect URL for local development.
+5. Copy `.env.example` to `.env.local` and replace both values with the project URL and publishable key shown in the Supabase project settings.
+6. Run `npm run dev`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Do not put a Supabase secret/service-role key in `NEXT_PUBLIC_SUPABASE_ANON_KEY`; any `NEXT_PUBLIC_` value is sent to the browser.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Using the board
 
-## Deploy on Vercel
+- Select **Continue from here** on an agent node to make the next message its child.
+- Select **New root** to start a separate thought on the same board.
+- Use the branch icon to hide or reveal all descendants. Its badge shows how many messages are hidden.
+- Use the expand icon or **Full response** to read a message in the full-size reader.
+- Drag or resize nodes to arrange the board. Node geometry is saved to Supabase.
+- Pan and zoom normally. The viewport and last-opened conversation are restored after logout on the same browser.
+- Pin a node or type `@A3` to include its precise ancestry in the next response. The Context panel previews exactly what will be sent.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Keyboard details: `Enter` sends, `Shift+Enter` inserts a line break, `@` opens node references, the mouse wheel pans vertically, `Shift+wheel` pans horizontally, and `Ctrl/Cmd+wheel` zooms.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Ollama
+
+The Ollama server adapter and dependency remain in the repository for future/local development, but the product UI has no preconfigured Ollama connection or model. Codex is the only connected provider. The adapter refuses requests unless a developer explicitly sets `OLLAMA_HOST` and supplies a model; it contains no default endpoint or model.
+
+## Development
+
+```bash
+npm run lint
+npm test
+npm run build
+```
+
+To reset the local database and replay every migration:
+
+```bash
+npx supabase db reset
+```
+
+The real Codex integration test is opt-in because it starts a short turn and fork against your local Codex session:
+
+```bash
+env -u OPENAI_API_KEY CODEX_INTEGRATION_TEST=1 npx tsx --test lib/codex/integration.test.ts
+```
+
+## Architecture
+
+- Next.js App Router and React 19
+- React Flow for the spatial canvas
+- Local Codex app-server for model discovery, account status, streaming turns, branching, cancellation, and rate-limit information
+- Supabase Auth, Postgres, RLS, and Realtime for user-owned boards
+- Ollama retained as an unconnected adapter only
+
+The working context is bounded to roughly 12,000 estimated tokens. The active root-to-leaf path is automatic; pins and `@` references add only the ancestry required for the chosen node, never an entire sibling tree.

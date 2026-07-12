@@ -13,7 +13,7 @@ export default function ScrollTextAlongPath() {
 
   // Split text into multiple lines
   const texts = [
-    "chatgpt. claude. gemini.",
+    "one chat becomes a hundred tabs.",
     "honestly it's the same shit.",
     "you create new convos every time. ",
     "no organization at all. no way to find your work.",

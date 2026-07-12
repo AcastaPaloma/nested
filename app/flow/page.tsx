@@ -7,21 +7,22 @@ import {
   Controls,
   useNodesState,
   useEdgesState,
-  useReactFlow,
   ReactFlowProvider,
   SelectionMode,
   PanOnScrollMode,
   type Node,
   type Edge,
   type NodeChange,
+  type ReactFlowInstance,
+  type Viewport,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
-import { nodeTypes } from "./components/Nodes";
+import { MarkdownContent, nodeTypes } from "./components/Nodes";
 import { edgeTypes } from "./components/Edges";
 import { InputBar } from "./components/InputBar";
 import { ConversationSidebar } from "./components/ConversationSidebar";
-import { getLayoutedElements, getZoomPosition } from "./dagre-layout";
+import { getLayoutedElements } from "./dagre-layout";
 import {
   type FlowNodeData,
   type FlowEdgeData,
@@ -35,29 +36,32 @@ import {
 import { useConversation, useConversations } from "@/hooks/useConversation";
 import { useAuth } from "@/hooks/useAuth";
 import type { Message } from "@/lib/database.types";
-
-// Model provider type
-type ModelProvider = "gemini" | "ollama";
-
-// Available models configuration
-const MODEL_OPTIONS: Record<ModelProvider, string[]> = {
-  gemini: ["gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-1.5-pro"],
-  ollama: ["gemma3:270m", "mario"],
-};
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Badge } from "@/components/ui/badge";
+import { ChevronDown, Database, PanelLeft, Plus, RefreshCw, Sparkles, Square, X } from "lucide-react";
+import type { CodexStatus } from "@/lib/codex/types";
 
 // LLM API call with streaming
 async function callLLM(
   payload: {
-    messages: Array<{ role: "user" | "assistant"; content: string }>;
-    provider?: ModelProvider;
-    model?: string;
+    endpoint: string;
+    body: unknown;
   },
-  onChunk: (text: string) => void
+  onChunk: (delta: string, fullText: string) => void
 ): Promise<string> {
-  const res = await fetch("/api/llm", {
+  const res = await fetch(payload.endpoint, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify(payload.body),
   });
 
   if (!res.ok) {
@@ -72,27 +76,33 @@ async function callLLM(
 
   const decoder = new TextDecoder();
   let fullText = "";
+  let buffer = "";
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    const chunk = decoder.decode(value, { stream: true });
-    const lines = chunk.split("\n");
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
 
-    for (const line of lines) {
+    for (const event of events) {
+      const line = event.split("\n").find((candidate) => candidate.startsWith("data: "));
+      if (!line) continue;
       if (line.startsWith("data: ")) {
         const data = line.slice(6);
         if (data === "[DONE]") continue;
 
         try {
-          const parsed = JSON.parse(data) as { text?: string };
-          if (parsed.text) {
+          const parsed = JSON.parse(data) as { text?: string; error?: string } | string;
+          if (typeof parsed === "object" && parsed.error) throw new Error(parsed.error);
+          if (typeof parsed === "object" && parsed.text) {
             fullText += parsed.text;
-            onChunk(fullText);
+            onChunk(parsed.text, fullText);
           }
-        } catch {
-          // Ignore parse errors
+        } catch (error) {
+          if (error instanceof SyntaxError) continue;
+          throw error;
         }
       }
     }
@@ -123,6 +133,13 @@ function FlowCanvas() {
   // Auto-load the most recent conversation on initial load
   useEffect(() => {
     if (!currentConversationId && conversations.length > 0) {
+      const savedConversationId = user?.id
+        ? window.localStorage.getItem(`nested:last-conversation:${user.id}`)
+        : null;
+      if (savedConversationId && conversations.some((conversation) => conversation.id === savedConversationId)) {
+        setCurrentConversationId(savedConversationId);
+        return;
+      }
       // Sort by updated_at or created_at descending and pick the first one
       const sortedConversations = [...conversations].sort((a, b) => {
         const dateA = new Date(a.updated_at || a.created_at).getTime();
@@ -131,16 +148,20 @@ function FlowCanvas() {
       });
       setCurrentConversationId(sortedConversations[0].id);
     }
-  }, [conversations, currentConversationId]);
+  }, [conversations, currentConversationId, user?.id]);
+
+  useEffect(() => {
+    if (user?.id && currentConversationId) {
+      window.localStorage.setItem(`nested:last-conversation:${user.id}`, currentConversationId);
+    }
+  }, [currentConversationId, user?.id]);
 
   const {
-    conversation,
     messages: dbMessages,
     references,
     nodePositions,
     isLoading: isLoadingConversation,
     addMessage,
-    updateMessage,
     deleteMessage,
     saveNodePositions,
   } = useConversation(currentConversationId);
@@ -148,19 +169,50 @@ function FlowCanvas() {
   // Local streaming state (for messages being streamed)
   const [streamingMessages, setStreamingMessages] = useState<Map<string, { content: string; isStreaming: boolean }>>(new Map());
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
+  const [collapsedBranches, setCollapsedBranches] = useState<Set<string>>(new Set());
+  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<FlowNodeData>>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge<FlowEdgeData>>([]);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [pinnedMessageIds, setPinnedMessageIds] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [circularWarning, setCircularWarning] = useState<string | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState<ModelProvider>("gemini");
-  const [selectedModel, setSelectedModel] = useState<string>("gemini-2.5-flash-lite");
-  const { setCenter } = useReactFlow();
+  const [selectedModel, setSelectedModel] = useState<string>("");
+  const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(false);
+  const [activeAssistantId, setActiveAssistantId] = useState<string | null>(null);
+  const [failedRetry, setFailedRetry] = useState<{ userMessage: Message; references: string[] } | null>(null);
   const lastNodeIdRef = useRef<string | null>(null);
   const hasInitialLayoutRef = useRef(false);
   const prevMessageCountRef = useRef(0);
   const prevConversationIdRef = useRef<string | null>(null);
+
+  const refreshCodexStatus = useCallback(async (refresh = false) => {
+    setStatusLoading(true);
+    try {
+      const response = await fetch(`/api/codex/status${refresh ? "?refresh=true" : ""}`);
+      if (!response.ok) throw new Error("Unable to read Codex status");
+      const nextStatus = (await response.json()) as CodexStatus;
+      setCodexStatus(nextStatus);
+      setSelectedModel((current) => {
+        const available = nextStatus.models.some((model) => model.model === current);
+        return available
+          ? current
+          : nextStatus.models.find((model) => model.isDefault)?.model ?? nextStatus.models[0]?.model ?? "";
+      });
+    } catch (error) {
+      setCodexStatus({
+        connected: false, authenticated: false, accountType: null, email: null,
+        planType: null, models: [], rateLimits: [],
+        error: error instanceof Error ? error.message : "Codex unavailable",
+      });
+    } finally {
+      setStatusLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void refreshCodexStatus(); }, [refreshCodexStatus]);
 
   // Clear local state when conversation changes
   useEffect(() => {
@@ -170,7 +222,11 @@ function FlowCanvas() {
       setEdges([]);
       setStreamingMessages(new Map());
       setCollapsedNodes(new Set());
+      setCollapsedBranches(new Set());
+      setExpandedNodeId(null);
       setReplyingTo(null);
+      setPinnedMessageIds([]);
+      setFailedRetry(null);
       setCircularWarning(null);
       hasInitialLayoutRef.current = false;
       prevMessageCountRef.current = 0;
@@ -291,6 +347,78 @@ function FlowCanvas() {
     });
   }, []);
 
+  const handleToggleBranch = useCallback((nodeId: string) => {
+    setCollapsedBranches((current) => {
+      const next = new Set(current);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  }, []);
+
+  const hiddenDescendantCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const message of messages) {
+      const queue = messages.filter((candidate) => candidate.parent_id === message.id);
+      const visited = new Set<string>();
+      while (queue.length > 0) {
+        const descendant = queue.shift()!;
+        if (visited.has(descendant.id)) continue;
+        visited.add(descendant.id);
+        queue.push(...messages.filter((candidate) => candidate.parent_id === descendant.id));
+      }
+      counts.set(message.id, visited.size);
+    }
+    return counts;
+  }, [messages]);
+
+  const visibleMessageIds = useMemo(() => {
+    const visible = new Set<string>();
+    const hidden = new Set<string>();
+    const childrenByParent = new Map<string, DisplayMessage[]>();
+    for (const message of messages) {
+      if (!message.parent_id) continue;
+      const children = childrenByParent.get(message.parent_id) ?? [];
+      children.push(message);
+      childrenByParent.set(message.parent_id, children);
+    }
+    const hideChildren = (id: string) => {
+      for (const child of childrenByParent.get(id) ?? []) {
+        if (hidden.has(child.id)) continue;
+        hidden.add(child.id);
+        hideChildren(child.id);
+      }
+    };
+    for (const id of collapsedBranches) hideChildren(id);
+    for (const message of messages) if (!hidden.has(message.id)) visible.add(message.id);
+    return visible;
+  }, [collapsedBranches, messages]);
+
+  const handleToggleContextPin = useCallback((nodeId: string) => {
+    setPinnedMessageIds((current) =>
+      current.includes(nodeId)
+        ? current.filter((id) => id !== nodeId)
+        : [...current, nodeId]
+    );
+  }, []);
+
+  // Editing a leaf removes its generated subtree and returns the composer to
+  // the prior branch point.
+  const handleEdit = useCallback(
+    async (nodeId: string) => {
+      const msg = messagesById.get(nodeId);
+      if (!msg) return;
+
+      try {
+        await deleteMessage(nodeId);
+        if (msg.parent_id) setReplyingTo(msg.parent_id);
+      } catch (error) {
+        console.error("Failed to delete message:", error);
+      }
+    },
+    [messagesById, deleteMessage]
+  );
+
   // Convert messages to ReactFlow nodes and edges
   useEffect(() => {
     if (!currentConversationId) {
@@ -317,7 +445,8 @@ function FlowCanvas() {
     const needsLayout = (messageCountChanged && hasNewMessagesWithoutPositions) || (!hasInitialLayoutRef.current && !hasSavedPositions);
     prevMessageCountRef.current = messages.length;
 
-    const newNodes: Node<FlowNodeData>[] = messages.map((msg) => {
+    const visibleMessages = messages.filter((message) => visibleMessageIds.has(message.id));
+    const newNodes: Node<FlowNodeData>[] = visibleMessages.map((msg) => {
       const treeLabel = treeLabels.get(msg.id) ?? "?";
       const treeIndex = treeIndices.get(msg.id) ?? 0;
       const palette =
@@ -363,11 +492,19 @@ function FlowCanvas() {
             msg.role === "assistant"
               ? (nodeId: string) => setReplyingTo(nodeId)
               : undefined,
+          onOpen: setExpandedNodeId,
           onEdit:
             msg.role === "user" && isLastInBranch(messages, msg.id)
               ? handleEdit
               : undefined,
           onToggleCollapse: () => handleToggleCollapse(msg.id),
+          onToggleBranch: () => handleToggleBranch(msg.id),
+          onToggleContextPin: () => handleToggleContextPin(msg.id),
+          isContextPinned: pinnedMessageIds.includes(msg.id),
+          childCount: messages.filter((message) => message.parent_id === msg.id).length,
+          hiddenDescendantCount: collapsedBranches.has(msg.id)
+            ? hiddenDescendantCounts.get(msg.id) ?? 0
+            : 0,
         },
       };
     });
@@ -375,8 +512,8 @@ function FlowCanvas() {
     const newEdges: Edge<FlowEdgeData>[] = [];
 
     // Add reply edges (parent-child connections)
-    for (const msg of messages) {
-      if (msg.parent_id) {
+    for (const msg of visibleMessages) {
+      if (msg.parent_id && visibleMessageIds.has(msg.parent_id)) {
         newEdges.push({
           id: `reply-${msg.parent_id}-${msg.id}`,
           source: msg.parent_id,
@@ -389,6 +526,7 @@ function FlowCanvas() {
 
     // Add reference edges (cross-branch references)
     for (const ref of references) {
+      if (!visibleMessageIds.has(ref.source_message_id) || !visibleMessageIds.has(ref.target_message_id)) continue;
       const isCircular = wouldCreateCircle(messagesById, ref.source_message_id, ref.target_message_id);
       newEdges.push({
         id: `ref-${ref.source_message_id}-${ref.target_message_id}`,
@@ -431,8 +569,9 @@ function FlowCanvas() {
     } else {
       // Check if there are new nodes that need to be added
       setNodes((currentNodes) => {
-        const currentNodeIds = new Set(currentNodes.map((n) => n.id));
-        const currentNodesMap = new Map(currentNodes.map((n) => [n.id, n]));
+        const visibleCurrentNodes = currentNodes.filter((node) => visibleMessageIds.has(node.id));
+        const currentNodeIds = new Set(visibleCurrentNodes.map((n) => n.id));
+        const currentNodesMap = new Map(visibleCurrentNodes.map((n) => [n.id, n]));
         const newNodesToAdd = newNodes.filter((n) => !currentNodeIds.has(n.id));
 
         if (newNodesToAdd.length > 0) {
@@ -442,14 +581,14 @@ function FlowCanvas() {
           const positionedNewNodes: typeof newNodesToAdd = [];
 
           for (const node of newNodesToAdd) {
-            const parentId = messages.find((m) => m.id === node.id)?.parent_id;
+              const parentId = visibleMessages.find((m) => m.id === node.id)?.parent_id;
             const parentNode = parentId ? positionedNodesMap.get(parentId) : null;
 
             let positionedNode;
             if (parentNode) {
               // Position below parent with some offset
               // Count siblings to offset horizontally
-              const siblings = messages.filter((m) => m.parent_id === parentId);
+              const siblings = visibleMessages.filter((m) => m.parent_id === parentId);
               const siblingIndex = siblings.findIndex((m) => m.id === node.id);
               const horizontalOffset = siblingIndex * 350;
 
@@ -478,7 +617,7 @@ function FlowCanvas() {
           }
 
           // Update existing nodes with new data
-          const updatedExisting = currentNodes.map((node) => {
+          const updatedExisting = visibleCurrentNodes.map((node) => {
             const newNode = newNodes.find((n) => n.id === node.id);
             if (newNode) {
               return { ...node, data: newNode.data };
@@ -490,7 +629,7 @@ function FlowCanvas() {
         }
 
         // Just update existing nodes' data
-        return currentNodes.map((node) => {
+        return visibleCurrentNodes.map((node) => {
           const newNode = newNodes.find((n) => n.id === node.id);
           if (newNode) {
             return { ...node, data: newNode.data };
@@ -505,6 +644,7 @@ function FlowCanvas() {
     }
   }, [
     currentConversationId,
+    dbMessages,
     messages,
     references,
     nodePositions,
@@ -515,80 +655,62 @@ function FlowCanvas() {
     setNodes,
     setEdges,
     handleToggleCollapse,
+    handleToggleBranch,
+    handleToggleContextPin,
+    handleEdit,
+    pinnedMessageIds,
+    collapsedBranches,
+    hiddenDescendantCounts,
+    visibleMessageIds,
   ]);
 
-  // Handle edit (delete subtree and prepare for re-entry)
-  const handleEdit = useCallback(
-    async (nodeId: string) => {
-      const msg = messagesById.get(nodeId);
-      if (!msg) return;
 
-      try {
-        await deleteMessage(nodeId);
-        if (msg.parent_id) {
-          setReplyingTo(msg.parent_id);
-        }
-      } catch (error) {
-        console.error("Failed to delete message:", error);
-      }
-    },
-    [messagesById, deleteMessage]
-  );
+  const generateForUser = useCallback(async (userMsg: Message, branchReferences: string[]) => {
+    const assistantMsg = await addMessage({
+      parent_id: userMsg.id,
+      role: "assistant",
+      content: "",
+      model: selectedModel,
+      provider: "codex",
+    });
+    setActiveAssistantId(assistantMsg.id);
+    lastNodeIdRef.current = assistantMsg.id;
+    setStreamingMessages((prev) => {
+      const next = new Map(prev);
+      next.set(assistantMsg.id, { content: "", isStreaming: true });
+      return next;
+    });
 
-  // Get context for LLM - aggregate ancestry and references
-  const getContextMessages = useCallback(
-    (nodeId: string, branchRefs: string[]) => {
-      const visited = new Set<string>();
-      const contextMessages: DisplayMessage[] = [];
-
-      // Get ancestry
-      const getAncestry = (id: string): DisplayMessage[] => {
-        const chain: DisplayMessage[] = [];
-        let current = messagesById.get(id);
-        while (current && !visited.has(current.id)) {
-          visited.add(current.id);
-          chain.push(current);
-          current = current.parent_id ? messagesById.get(current.parent_id) : undefined;
-        }
-        chain.reverse();
-        return chain;
-      };
-
-      // Add main ancestry
-      contextMessages.push(...getAncestry(nodeId));
-
-      // Add referenced branches (entire trees)
-      for (const refId of branchRefs) {
-        // Get root of referenced message
-        let root = messagesById.get(refId);
-        while (root?.parent_id) {
-          root = messagesById.get(root.parent_id);
-        }
-        if (root) {
-          // Get all nodes in that tree
-          const queue = [root.id];
-          while (queue.length > 0) {
-            const id = queue.shift()!;
-            if (visited.has(id)) continue;
-            visited.add(id);
-            const msg = messagesById.get(id);
-            if (msg) {
-              contextMessages.push(msg);
-              messages
-                .filter((m) => m.parent_id === id)
-                .forEach((m) => queue.push(m.id));
-            }
-          }
-        }
-      }
-
-      // Sort by creation time
-      return contextMessages.sort(
-        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    try {
+      await callLLM(
+        { endpoint: "/api/codex/generate", body: { messageId: assistantMsg.id, model: selectedModel } },
+        (_delta: string, streamedText: string) => {
+          setStreamingMessages((prev) => {
+            const next = new Map(prev);
+            next.set(assistantMsg.id, { content: streamedText, isStreaming: true });
+            return next;
+          });
+        },
       );
-    },
-    [messagesById, messages]
-  );
+      setStreamingMessages((prev) => {
+        const next = new Map(prev);
+        next.delete(assistantMsg.id);
+        return next;
+      });
+      setReplyingTo(assistantMsg.id);
+      setFailedRetry(null);
+    } catch (error) {
+      setStreamingMessages((prev) => {
+        const next = new Map(prev);
+        next.delete(assistantMsg.id);
+        return next;
+      });
+      setFailedRetry({ userMessage: userMsg, references: branchReferences });
+      throw error;
+    } finally {
+      setActiveAssistantId(null);
+    }
+  }, [addMessage, selectedModel]);
 
   // Handle sending a message
   const handleSend = useCallback(
@@ -628,113 +750,8 @@ function FlowCanvas() {
           branch_references: branchReferences,
         });
 
-        // Create placeholder assistant message
-        const assistantMsg = await addMessage({
-          parent_id: userMsg.id,
-          role: "assistant",
-          content: "",
-          model: selectedModel,
-          provider: selectedProvider,
-        });
-
         setReplyingTo(null);
-        lastNodeIdRef.current = assistantMsg.id;
-
-        // Set streaming state
-        setStreamingMessages((prev) => {
-          const next = new Map(prev);
-          next.set(assistantMsg.id, { content: "", isStreaming: true });
-          return next;
-        });
-
-        // Build context - include the new user message which may not be in state yet
-        const userDisplayMsg: DisplayMessage = {
-          ...userMsg,
-          isStreaming: false,
-          isCollapsed: false,
-          branchReferences,
-        };
-
-        // Get ancestry for the parent (if any) and add the new user message
-        const contextMessages: DisplayMessage[] = [];
-        const visited = new Set<string>();
-
-        if (replyingTo) {
-          // Get ancestry from parent
-          let current = messagesById.get(replyingTo);
-          const ancestry: DisplayMessage[] = [];
-          while (current && !visited.has(current.id)) {
-            visited.add(current.id);
-            ancestry.push(current);
-            current = current.parent_id ? messagesById.get(current.parent_id) : undefined;
-          }
-          ancestry.reverse();
-          contextMessages.push(...ancestry);
-        }
-        contextMessages.push(userDisplayMsg);
-        visited.add(userDisplayMsg.id);
-
-        // Add referenced branches
-        for (const refId of branchReferences) {
-          // Get root of referenced message
-          let root = messagesById.get(refId);
-          while (root?.parent_id) {
-            root = messagesById.get(root.parent_id);
-          }
-          if (root && !visited.has(root.id)) {
-            // Get all nodes in that tree
-            const queue = [root.id];
-            while (queue.length > 0) {
-              const id = queue.shift()!;
-              if (visited.has(id)) continue;
-              visited.add(id);
-              const msg = messagesById.get(id);
-              if (msg) {
-                contextMessages.push(msg);
-                messages
-                  .filter((m) => m.parent_id === id)
-                  .forEach((m) => queue.push(m.id));
-              }
-            }
-          }
-        }
-
-        // Sort by creation time
-        contextMessages.sort(
-          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-        );
-
-        // Call LLM
-        const llmText = await callLLM(
-          {
-            messages: contextMessages.map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
-            provider: selectedProvider,
-            model: selectedModel,
-          },
-          (streamedText: string) => {
-            setStreamingMessages((prev) => {
-              const next = new Map(prev);
-              next.set(assistantMsg.id, { content: streamedText, isStreaming: true });
-              return next;
-            });
-          }
-        );
-
-        // Update the message in the database
-        await updateMessage(assistantMsg.id, llmText || "(empty response)");
-
-        // Clear streaming state
-        setStreamingMessages((prev) => {
-          const next = new Map(prev);
-          next.delete(assistantMsg.id);
-          return next;
-        });
-
-        // Auto-set reply to the new assistant message
-        setReplyingTo(assistantMsg.id);
+        await generateForUser(userMsg, branchReferences);
       } catch (error) {
         const err = error instanceof Error ? error.message : "Unknown error";
         console.error("Error sending message:", err);
@@ -749,14 +766,41 @@ function FlowCanvas() {
       replyingTo,
       messagesById,
       treeLabels,
-      selectedProvider,
-      selectedModel,
       addMessage,
-      updateMessage,
-      getContextMessages,
       createConversation,
+      generateForUser,
     ]
   );
+
+  const handleRetry = useCallback(async () => {
+    if (!failedRetry) return;
+    setIsLoading(true);
+    try {
+      await generateForUser(failedRetry.userMessage, failedRetry.references);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Retry failed";
+      setCircularWarning(`Error: ${message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [failedRetry, generateForUser]);
+
+  const handleCancel = useCallback(async () => {
+    if (!activeAssistantId) return;
+    try {
+      const response = await fetch("/api/codex/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: activeAssistantId }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null);
+        throw new Error(data?.error ?? "Unable to stop generation");
+      }
+    } catch (error) {
+      setCircularWarning(error instanceof Error ? error.message : "Unable to stop generation");
+    }
+  }, [activeAssistantId]);
 
   // Handle creating a new conversation
   const handleNewConversation = useCallback(async () => {
@@ -769,6 +813,41 @@ function FlowCanvas() {
       console.error("Failed to create conversation:", error);
     }
   }, [createConversation]);
+
+  const viewportStorageKey = user?.id && currentConversationId
+    ? `nested:viewport:${user.id}:${currentConversationId}`
+    : null;
+  const expandedMessage = expandedNodeId ? messagesById.get(expandedNodeId) : null;
+
+  const handleFlowInit = useCallback((instance: ReactFlowInstance<Node<FlowNodeData>, Edge<FlowEdgeData>>) => {
+    if (!viewportStorageKey) return;
+    const saved = window.localStorage.getItem(viewportStorageKey);
+    if (saved) {
+      try {
+        const viewport = JSON.parse(saved) as Viewport;
+        if ([viewport.x, viewport.y, viewport.zoom].every(Number.isFinite)) {
+          void instance.setViewport(viewport, { duration: 0 });
+          return;
+        }
+      } catch {
+        window.localStorage.removeItem(viewportStorageKey);
+      }
+    }
+    window.requestAnimationFrame(() => void instance.fitView({ padding: 0.2, duration: 250 }));
+  }, [viewportStorageKey]);
+
+  const handleMoveEnd = useCallback((_event: MouseEvent | TouchEvent | null, viewport: Viewport) => {
+    if (viewportStorageKey) {
+      window.localStorage.setItem(viewportStorageKey, JSON.stringify(viewport));
+    }
+  }, [viewportStorageKey]);
+
+  const focusComposer = useCallback((parentId: string | null) => {
+    setReplyingTo(parentId);
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>('[data-flow-composer="true"]')?.focus();
+    });
+  }, []);
 
   return (
     <div className="w-screen h-screen bg-white flex">
@@ -791,49 +870,86 @@ function FlowCanvas() {
       <div className="flex-1 relative">
         {/* Toggle Sidebar Button */}
         {!showSidebar && (
-          <button
+          <Button
+            variant="outline"
+            size="icon"
             onClick={() => setShowSidebar(true)}
-            className="fixed top-4 left-4 z-50 p-2 bg-white border border-gray-200 rounded-lg shadow-sm hover:bg-gray-50"
+            className="fixed top-4 left-4 z-50 shadow-sm"
+            aria-label="Open conversations"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-            </svg>
-          </button>
+            <PanelLeft />
+          </Button>
         )}
 
         {/* Model Selector */}
-        <div className="fixed top-4 right-4 z-50 flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2 shadow-sm">
-          <select
-            value={selectedProvider}
-            onChange={(e) => {
-              const provider = e.target.value as ModelProvider;
-              setSelectedProvider(provider);
-              setSelectedModel(MODEL_OPTIONS[provider][0]);
-            }}
-            className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-700"
-          >
-            <option value="gemini">Gemini</option>
-            <option value="ollama">Ollama</option>
-          </select>
-          <span className="text-gray-300">|</span>
-          <select
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            className="text-sm bg-transparent border-none outline-none cursor-pointer text-gray-600"
-          >
-            {MODEL_OPTIONS[selectedProvider].map((model) => (
-              <option key={model} value={model}>
-                {model}
-              </option>
-            ))}
-          </select>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" className="fixed top-4 right-4 z-50 bg-background/95 shadow-sm backdrop-blur">
+              <Sparkles />
+              <span>{`Codex · ChatGPT ${codexStatus?.planType ?? ""}`.trim()}</span>
+              <Badge variant="secondary" className="hidden font-mono font-normal sm:inline-flex">
+                {selectedModel}
+              </Badge>
+              <ChevronDown className="text-muted-foreground" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-64">
+            <DropdownMenuLabel>Model</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={selectedModel} onValueChange={setSelectedModel}>
+              {(codexStatus?.models.map((model) => model.model) ?? []).map((model) => (
+                <DropdownMenuRadioItem key={model} value={model} className="font-mono text-xs">
+                  {model}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <div className="space-y-2 px-2 py-1.5 text-xs text-muted-foreground">
+                {codexStatus?.authenticated ? (
+                  <>
+                    <p>{codexStatus.email ?? "ChatGPT account"} · <span className="capitalize">{codexStatus.planType}</span></p>
+                    {codexStatus.rateLimits.flatMap((limit) => [limit.primary, limit.secondary]).filter(Boolean).map((window, index) => (
+                      <p key={index}>{Math.round(window!.usedPercent)}% used{window!.resetsAt ? ` · resets ${new Date(window!.resetsAt * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}</p>
+                    ))}
+                  </>
+                ) : (
+                  <p>Signed out. Run <code className="font-mono">codex login --device-auth</code>.</p>
+                )}
+                {codexStatus?.error && <p className="text-destructive">{codexStatus.error}</p>}
+                <button className="flex items-center gap-1 hover:text-foreground" onClick={() => void refreshCodexStatus(true)}>
+                  <RefreshCw className={statusLoading ? "animate-spin" : ""} /> Refresh
+                </button>
+            </div>
+            <DropdownMenuSeparator />
+            <p className="px-2 py-1.5 text-[11px] text-muted-foreground">Esc closes this menu</p>
+          </DropdownMenuContent>
+        </DropdownMenu>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => focusComposer(null)}
+          className={`fixed top-4 z-50 bg-background/95 shadow-sm backdrop-blur ${showSidebar ? "left-[19rem]" : "left-16"}`}
+        >
+          <Plus /> New root
+        </Button>
 
         {/* Circular warning */}
         {circularWarning && (
           <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-red-100 border border-red-300 rounded-lg text-red-700 text-sm">
             ⚠ {circularWarning}
           </div>
+        )}
+
+        {activeAssistantId && (
+          <Button variant="outline" size="sm" onClick={handleCancel} className="fixed right-4 top-16 z-50 bg-background/95 shadow-sm">
+            <Square className="fill-current" /> Stop
+          </Button>
+        )}
+
+        {failedRetry && !isLoading && (
+          <Button variant="outline" size="sm" onClick={handleRetry} className="fixed left-1/2 top-16 z-50 -translate-x-1/2 bg-background/95 shadow-sm">
+            <RefreshCw /> Retry failed response
+          </Button>
         )}
 
         {/* Loading State */}
@@ -869,13 +985,15 @@ function FlowCanvas() {
         {/* ReactFlow Canvas */}
         {currentConversationId && (
           <ReactFlow
+            key={currentConversationId}
             nodes={nodes}
             edges={edges}
             onNodesChange={handleNodesChange}
             onEdgesChange={onEdgesChange}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
-            fitView
+            onInit={handleFlowInit}
+            onMoveEnd={handleMoveEnd}
             minZoom={0.1}
             maxZoom={2}
             proOptions={{ hideAttribution: true }}
@@ -902,6 +1020,39 @@ function FlowCanvas() {
           </ReactFlow>
         )}
 
+        {expandedMessage && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 p-4 backdrop-blur-sm" onMouseDown={() => setExpandedNodeId(null)}>
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-label={expandedMessage.role === "assistant" ? "Full agent response" : "Full message"}
+              className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <header className="flex items-center gap-3 border-b px-5 py-4">
+                <Badge variant="secondary" className="font-mono">{shortLabels.get(expandedMessage.id)}</Badge>
+                <div>
+                  <h2 className="font-semibold">{expandedMessage.role === "assistant" ? "Agent response" : "Your message"}</h2>
+                  <p className="text-xs text-muted-foreground">Full message · scroll without resizing the board</p>
+                </div>
+                <Button variant="ghost" size="icon" className="ml-auto" onClick={() => setExpandedNodeId(null)} aria-label="Close full message">
+                  <X />
+                </Button>
+              </header>
+              <div className="overflow-y-auto px-6 py-5 sm:px-8">
+                <MarkdownContent content={expandedMessage.content} />
+              </div>
+              {expandedMessage.role === "assistant" && (
+                <footer className="flex justify-end border-t px-5 py-3">
+                  <Button onClick={() => { focusComposer(expandedMessage.id); setExpandedNodeId(null); }}>
+                    <Plus /> Continue from this response
+                  </Button>
+                </footer>
+              )}
+            </section>
+          </div>
+        )}
+
         {/* Input Bar */}
         {currentConversationId && (
           <InputBar
@@ -909,10 +1060,11 @@ function FlowCanvas() {
             messages={messages}
             shortLabels={shortLabels}
             treeLabels={treeLabels}
-            treeIndices={treeIndices}
             replyingTo={replyingTo}
+            pinnedMessageIds={pinnedMessageIds}
+            onTogglePin={handleToggleContextPin}
             onCancelReply={() => setReplyingTo(null)}
-            disabled={isLoading}
+            disabled={isLoading || !codexStatus?.authenticated || !selectedModel}
           />
         )}
       </div>
@@ -921,6 +1073,35 @@ function FlowCanvas() {
 }
 
 export default function FlowPage() {
+  if (
+    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  ) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-muted/40 p-6">
+        <section className="w-full max-w-xl rounded-2xl border bg-card p-6 text-card-foreground shadow-sm sm:p-8">
+          <div className="mb-5 flex size-11 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+            <Database className="size-5" />
+          </div>
+          <Badge variant="secondary" className="mb-3">Local setup</Badge>
+          <h1 className="text-2xl font-semibold tracking-tight">Connect Nested&apos;s conversation store</h1>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            The UI is ready, but this checkout has no Supabase credentials. Add these public values to
+            <code className="mx-1 rounded bg-muted px-1.5 py-0.5 font-mono text-xs">.env.local</code>
+            and restart the dev server.
+          </p>
+          <div className="mt-5 space-y-2 rounded-xl border bg-muted/40 p-4 font-mono text-xs">
+            <p>NEXT_PUBLIC_SUPABASE_URL=…</p>
+            <p>NEXT_PUBLIC_SUPABASE_ANON_KEY=…</p>
+          </div>
+          <p className="mt-4 text-xs leading-5 text-muted-foreground">
+            Generation uses your local Codex session. Conversation persistence uses Supabase.
+          </p>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <ReactFlowProvider>
       <FlowCanvas />

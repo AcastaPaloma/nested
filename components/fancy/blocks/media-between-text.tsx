@@ -1,9 +1,11 @@
 "use client"
 
-import { ElementType, forwardRef, useImperativeHandle, useRef, useState } from "react"
+import { forwardRef, useImperativeHandle, useRef, useState } from "react"
 import { motion, useInView, UseInViewOptions, Variants } from "motion/react"
 
 import { cn } from "@/lib/utils"
+
+const MotionText = motion.p
 
 interface MediaBetweenTextProps {
   /**
@@ -35,12 +37,6 @@ interface MediaBetweenTextProps {
    * Fallback URL for video poster or image loading
    */
   fallbackUrl?: string
-
-  /**
-   * HTML Tag to render the text elements as
-   * @default p
-   */
-  as?: ElementType
 
   /**
    * Whether video should autoplay
@@ -128,7 +124,6 @@ export const MediaBetweenText = forwardRef<
       mediaType,
       mediaContainerClassName,
       fallbackUrl,
-      as = "p",
       autoPlay = true,
       loop = true,
       muted = true,
@@ -158,10 +153,7 @@ export const MediaBetweenText = forwardRef<
     const componentRef = useRef<HTMLDivElement>(null)
     const [isAnimating, setIsAnimating] = useState(false)
 
-    const isInView =
-      triggerType === "inView"
-        ? useInView(componentRef || containerRef, useInViewOptionsProp)
-        : false
+    const isInView = useInView(componentRef, useInViewOptionsProp)
     const [isHovered, setIsHovered] = useState(false)
 
     useImperativeHandle(ref, () => ({
@@ -178,8 +170,6 @@ export const MediaBetweenText = forwardRef<
             ? isAnimating
             : false
 
-    const TextComponent = motion.create(as)
-
     return (
       <div
         className={cn("flex", className)}
@@ -187,9 +177,9 @@ export const MediaBetweenText = forwardRef<
         onMouseEnter={() => triggerType === "hover" && setIsHovered(true)}
         onMouseLeave={() => triggerType === "hover" && setIsHovered(false)}
       >
-        <TextComponent layout className={leftTextClassName}>
+        <MotionText layout className={leftTextClassName}>
           {firstText}
-        </TextComponent>
+        </MotionText>
         <motion.div
           className={mediaContainerClassName}
           variants={animationVariants}
@@ -215,9 +205,9 @@ export const MediaBetweenText = forwardRef<
             />
           )}
         </motion.div>
-        <TextComponent layout className={rightTextClassName}>
+        <MotionText layout className={rightTextClassName}>
           {secondText}
-        </TextComponent>
+        </MotionText>
       </div>
     )
   }

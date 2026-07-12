@@ -1,5 +1,7 @@
 import { createClient } from "@/utils/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import { getCodexAppServer } from "@/lib/codex/app-server";
+import { threadsToArchive } from "@/lib/codex/runs";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -122,6 +124,12 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const { data: runs } = await supabase
+      .from("codex_runs")
+      .select("thread_id")
+      .eq("conversation_id", id)
+      .not("thread_id", "is", null);
+
     const { error } = await supabase
       .from("conversations")
       .delete()
@@ -129,6 +137,12 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    const threadIds = threadsToArchive(runs ?? []);
+    if (threadIds.length > 0) {
+      const manager = getCodexAppServer();
+      await Promise.allSettled(threadIds.map((threadId) => manager.archiveThread(threadId)));
     }
 
     return NextResponse.json({ success: true });

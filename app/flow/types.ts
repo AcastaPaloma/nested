@@ -65,8 +65,15 @@ export type TreePalette = typeof TREE_PALETTES[number] | typeof AGENT_PALETTE;
 export type FlowNodeData = {
   message: ChatMessage;
   onReply?: (nodeId: string) => void;
+  onOpen?: (nodeId: string) => void;
   onEdit?: (nodeId: string) => void;
   onResetSize?: (nodeId: string) => void;
+  onToggleCollapse?: (nodeId: string) => void;
+  onToggleBranch?: (nodeId: string) => void;
+  onToggleContextPin?: (nodeId: string) => void;
+  isContextPinned?: boolean;
+  childCount?: number;
+  hiddenDescendantCount?: number;
   isLastInBranch?: boolean;
   shortLabel: string; // e.g., "A1", "B3" for @ referencing
   treeLabel: string; // e.g., "A", "B" for branch referencing
@@ -207,4 +214,3 @@ export function isLastInBranch<T extends MessageLike>(
 ): boolean {
   return !messages.some((m) => getParentId(m) === nodeId);
 }
-

@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { createClient } from "@/utils/supabase/client";
-import type { Message, Conversation, MessageReference } from "@/lib/database.types";
+import type { Message, Conversation } from "@/lib/database.types";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 
 export type NodePositionData = {
@@ -33,7 +33,7 @@ export function useConversation(conversationId: string | null) {
   const savePositionsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingPositionsRef = useRef<Record<string, NodePositionData>>({});
 
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
 
   // Load conversation data
   const loadConversation = useCallback(async () => {
@@ -280,7 +280,7 @@ export function useConversation(conversationId: string | null) {
         if (positionsArray.length === 0) return;
 
         try {
-          await fetch("/api/node-positions", {
+          const response = await fetch("/api/node-positions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -288,6 +288,11 @@ export function useConversation(conversationId: string | null) {
               positions: positionsArray,
             }),
           });
+
+          if (!response.ok) {
+            const data = await response.json().catch(() => null);
+            throw new Error(data?.error || "Failed to save node positions");
+          }
 
           // Update local state
           setNodePositions((prev) => ({ ...prev, ...positionsToSave }));

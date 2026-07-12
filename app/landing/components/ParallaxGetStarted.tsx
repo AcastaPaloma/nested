@@ -81,7 +81,7 @@ const ParallaxGetStarted = () => {
           connect <br /> the dots.
         </p>
         <p className="text-lg z-50 hover:scale-110 transition-transform bg-white text-black rounded-full py-2 w-40 cursor-pointer">
-          Don't <br /> miss out
+          Don&apos;t <br /> miss out
         </p>
       </motion.div>
 

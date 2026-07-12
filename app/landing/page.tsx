@@ -7,7 +7,7 @@ import MediaBetweenTextHead from './components/MediaBetweenText'
 import ScrollTextAlongPath from './components/ScrollTextAlongPath'
 import ParallaxGetStarted from './components/ParallaxGetStarted'
 
-const page = () => {
+const Page = () => {
   const [showScrollPrompt, setShowScrollPrompt] = useState(false)
   const [hasShownPrompt, setHasShownPrompt] = useState(false)
   const [promptOpacity, setPromptOpacity] = useState(1)
@@ -71,4 +71,4 @@ const page = () => {
   )
 }
 
-export default page
+export default Page

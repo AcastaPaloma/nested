@@ -209,8 +209,75 @@ export type Database = {
           }
         ];
       };
+      codex_runs: {
+        Row: {
+          id: string;
+          message_id: string | null;
+          conversation_id: string;
+          user_id: string;
+          thread_id: string | null;
+          turn_id: string | null;
+          parent_run_id: string | null;
+          model: string;
+          status: "pending" | "in_progress" | "completed" | "failed" | "interrupted";
+          error_details: Json | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          message_id?: string | null;
+          conversation_id: string;
+          user_id: string;
+          thread_id?: string | null;
+          turn_id?: string | null;
+          parent_run_id?: string | null;
+          model: string;
+          status?: "pending" | "in_progress" | "completed" | "failed" | "interrupted";
+          error_details?: Json | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          message_id?: string | null;
+          conversation_id?: string;
+          user_id?: string;
+          thread_id?: string | null;
+          turn_id?: string | null;
+          parent_run_id?: string | null;
+          model?: string;
+          status?: "pending" | "in_progress" | "completed" | "failed" | "interrupted";
+          error_details?: Json | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "codex_runs_conversation_id_fkey";
+            columns: ["conversation_id"];
+            isOneToOne: false;
+            referencedRelation: "conversations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "codex_runs_message_id_fkey";
+            columns: ["message_id"];
+            isOneToOne: true;
+            referencedRelation: "messages";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "codex_runs_parent_run_id_fkey";
+            columns: ["parent_run_id"];
+            isOneToOne: false;
+            referencedRelation: "codex_runs";
+            referencedColumns: ["id"];
+          }
+        ];
+      };
     };
-    Views: {};
+    Views: { [_ in never]: never };
     Functions: {
       get_root_message_id: {
         Args: { message_id: string };
@@ -228,9 +295,19 @@ export type Database = {
         Args: { root_id: string };
         Returns: Database["public"]["Tables"]["messages"]["Row"][];
       };
+      claim_codex_run: {
+        Args: { assistant_message_id: string; selected_model: string };
+        Returns: Array<{
+          run_id: string;
+          parent_run_id: string | null;
+          parent_thread_id: string | null;
+          parent_turn_id: string | null;
+          should_fork: boolean;
+        }>;
+      };
     };
-    Enums: {};
-    CompositeTypes: {};
+    Enums: { [_ in never]: never };
+    CompositeTypes: { [_ in never]: never };
   };
 };
 
@@ -244,3 +321,4 @@ export type MessageReferenceInsert = Database["public"]["Tables"]["message_refer
 export type MessageAttachment = Database["public"]["Tables"]["message_attachments"]["Row"];
 export type NodePosition = Database["public"]["Tables"]["node_positions"]["Row"];
 export type NodePositionInsert = Database["public"]["Tables"]["node_positions"]["Insert"];
+export type CodexRun = Database["public"]["Tables"]["codex_runs"]["Row"];
