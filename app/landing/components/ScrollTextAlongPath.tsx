@@ -22,7 +22,6 @@ export default function ScrollTextAlongPath() {
   return (
     <div
       className="w-full h-[200vh] relative bg-black z-10"
-      style={{ fontFamily: 'var(--font-majormonodisplay)' }}
     >
       <div className="sticky w-full top-0 h-screen flex items-center">
         <div className="w-full h-full relative">

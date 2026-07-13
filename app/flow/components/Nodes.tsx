@@ -30,7 +30,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 // Markdown renderer component with proper styling and LaTeX support
 export function MarkdownContent({ content }: { content: string }) {
   return (
-    <div className="prose prose-sm max-w-none wrap-break-word" style={{ fontFamily: 'var(--font-dotgothic16)' }}>
+    <div className="prose prose-sm max-w-none wrap-break-word">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}

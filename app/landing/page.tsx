@@ -34,7 +34,7 @@ const Page = () => {
   }, [showScrollPrompt])
 
   return (
-    <div style={{ fontFamily: 'var(--font-majormonodisplay)' }} className="bg-black">
+    <div className="bg-black">
       <MediaBetweenTextHead onImageHover={handleImageHover} />
 
       <ScrollTextAlongPath />
