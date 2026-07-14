@@ -55,9 +55,9 @@ export async function POST(request: NextRequest) {
 
   const manager = getCodexAppServer();
   const status = await manager.getStatus();
-  if (!status.authenticated || status.accountType !== "chatgpt") {
+  if (!status.authenticated) {
     return Response.json(
-      { error: status.error ?? "Codex is signed out. Run codex login --device-auth, then refresh." },
+      { error: status.error ?? "Codex is signed out. Run codex login, then refresh." },
       { status: 503 },
     );
   }

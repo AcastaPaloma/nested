@@ -47,7 +47,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, Database, PanelLeft, Plus, RefreshCw, Sparkles, Square, X } from "lucide-react";
+import { ChevronDown, Database, PanelLeft, Plus, RefreshCw, Sparkles, Square, Terminal, X } from "lucide-react";
 import type { CodexStatus } from "@/lib/codex/types";
 
 // LLM API call with streaming
@@ -181,6 +181,7 @@ function FlowCanvas() {
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
+  const [showCodexSetup, setShowCodexSetup] = useState(false);
   const [activeAssistantId, setActiveAssistantId] = useState<string | null>(null);
   const [failedRetry, setFailedRetry] = useState<{ userMessage: Message; references: string[] } | null>(null);
   const lastNodeIdRef = useRef<string | null>(null);
@@ -886,7 +887,17 @@ function FlowCanvas() {
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className="fixed top-4 right-4 z-50 bg-background/95 shadow-sm backdrop-blur">
               <Sparkles />
-              <span>{`Codex · ChatGPT ${codexStatus?.planType ?? ""}`.trim()}</span>
+              <span>
+                {codexStatus?.authenticated
+                  ? `Codex · ${
+                      codexStatus.accountType === "apiKey"
+                        ? "API key"
+                        : codexStatus.accountType === "amazonBedrock"
+                          ? "Amazon Bedrock"
+                          : `ChatGPT ${codexStatus.planType ?? ""}`
+                    }`.trim()
+                  : "Connect your Codex"}
+              </span>
               <Badge variant="secondary" className="hidden font-mono font-normal sm:inline-flex">
                 {selectedModel}
               </Badge>
@@ -912,7 +923,9 @@ function FlowCanvas() {
                     ))}
                   </>
                 ) : (
-                  <p>Signed out. Run <code className="font-mono">codex login --device-auth</code>.</p>
+                  <Button variant="secondary" size="sm" className="w-full" onClick={() => setShowCodexSetup(true)}>
+                    <Terminal /> Connect your Codex
+                  </Button>
                 )}
                 {codexStatus?.error && <p className="text-destructive">{codexStatus.error}</p>}
                 <button className="flex items-center gap-1 hover:text-foreground" onClick={() => void refreshCodexStatus(true)}>
@@ -923,6 +936,15 @@ function FlowCanvas() {
             <p className="px-2 py-1.5 text-[11px] text-muted-foreground">Esc closes this menu</p>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        {!statusLoading && codexStatus && !codexStatus.authenticated && (
+          <Button
+            onClick={() => setShowCodexSetup(true)}
+            className="fixed right-4 top-16 z-50 shadow-lg"
+          >
+            <Terminal /> Connect your Codex
+          </Button>
+        )}
 
         <Button
           variant="outline"
@@ -1049,6 +1071,64 @@ function FlowCanvas() {
                   </Button>
                 </footer>
               )}
+            </section>
+          </div>
+        )}
+
+        {showCodexSetup && (
+          <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35 p-4 backdrop-blur-sm" onMouseDown={() => setShowCodexSetup(false)}>
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-label="Connect your Codex account"
+              className="w-full max-w-xl overflow-hidden rounded-2xl border bg-background shadow-2xl"
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <header className="flex items-start gap-3 border-b px-5 py-4">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+                  <Terminal className="size-5" />
+                </div>
+                <div>
+                  <h2 className="font-semibold">Connect your own Codex</h2>
+                  <p className="mt-1 text-sm leading-5 text-muted-foreground">
+                    Nested uses the Codex CLI session on this computer. Your credentials stay in Codex&apos;s local credential store and are never copied into Nested.
+                  </p>
+                </div>
+                <Button variant="ghost" size="icon" className="ml-auto shrink-0" onClick={() => setShowCodexSetup(false)} aria-label="Close Codex setup">
+                  <X />
+                </Button>
+              </header>
+              <div className="space-y-4 p-5">
+                <div className="rounded-xl border p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-medium">ChatGPT account</h3>
+                      <p className="text-xs text-muted-foreground">Uses your Codex access included with an eligible ChatGPT plan.</p>
+                    </div>
+                    <Badge>Recommended</Badge>
+                  </div>
+                  <code className="block rounded-lg bg-muted px-3 py-2 font-mono text-xs">codex login</code>
+                </div>
+                <div className="rounded-xl border p-4">
+                  <h3 className="text-sm font-medium">Headless or remote computer</h3>
+                  <p className="mb-2 text-xs text-muted-foreground">Use device-code authentication when the normal browser callback is unavailable.</p>
+                  <code className="block rounded-lg bg-muted px-3 py-2 font-mono text-xs">codex login --device-auth</code>
+                </div>
+                <div className="rounded-xl border p-4">
+                  <h3 className="text-sm font-medium">OpenAI API account</h3>
+                  <p className="mb-2 text-xs text-muted-foreground">Uses usage-based API billing. Keep the key in your shell—never paste it into Nested.</p>
+                  <code className="block overflow-x-auto rounded-lg bg-muted px-3 py-2 font-mono text-xs">printenv OPENAI_API_KEY | codex login --with-api-key</code>
+                </div>
+                <p className="text-xs leading-5 text-muted-foreground">
+                  Run one command in a terminal on the same computer as Nested. Then return here and refresh the connection.
+                </p>
+              </div>
+              <footer className="flex justify-end gap-2 border-t px-5 py-3">
+                <Button variant="ghost" onClick={() => setShowCodexSetup(false)}>Not now</Button>
+                <Button onClick={() => { void refreshCodexStatus(true); setShowCodexSetup(false); }}>
+                  <RefreshCw /> I&apos;ve connected Codex
+                </Button>
+              </footer>
             </section>
           </div>
         )}

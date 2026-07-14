@@ -1,5 +1,8 @@
 # Nested
 
+[![GitHub stars](https://img.shields.io/github/stars/AcastaPaloma/nested?style=flat-square&logo=github)](https://www.star-history.com/#AcastaPaloma/nested&Date)
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
+
 Nested is a spatial chat client for Codex. A conversation becomes a board: continue from any agent response, branch an idea without losing the original path, collapse subtrees, and open long responses in a focused reader.
 
 Generation runs through the local [Codex app server](https://developers.openai.com/codex/app-server). Nested reuses your Codex CLI login and never reads or copies your ChatGPT credentials. Supabase provides sign-in and per-user conversation storage.
@@ -12,7 +15,7 @@ Generation runs through the local [Codex app server](https://developers.openai.c
 - The [Codex CLI](https://developers.openai.com/codex/cli)
 - Either Docker for a local Supabase stack or a hosted [Supabase](https://supabase.com) project
 
-No OpenAI Platform API key is required.
+No OpenAI Platform API key is required when you connect an eligible ChatGPT account. Usage-based API-key login is also supported.
 
 ## Download and run
 
@@ -26,11 +29,21 @@ Install Codex if it is not already available, then sign in with your ChatGPT acc
 
 ```bash
 npm install -g @openai/codex
-codex login --device-auth
+codex login
 codex login status
 ```
 
 Nested starts `codex app-server` itself when the first response is requested. You do not need to run a second Codex process.
+
+### Connect your own Codex
+
+Every Nested installation uses the Codex session on that user&apos;s computer. Nested does not proxy a shared maintainer account and never asks users to paste credentials into the browser.
+
+- ChatGPT account: run `codex login` and finish the browser flow.
+- Headless computer: run `codex login --device-auth`.
+- OpenAI API account: run `printenv OPENAI_API_KEY | codex login --with-api-key`.
+
+After signing in, choose **Connect your Codex** in Nested and refresh. Credentials remain in Codex&apos;s local credential store; only account status, available models, and usage information are shown in the UI.
 
 ### Option A: local Supabase
 
@@ -112,3 +125,17 @@ env -u OPENAI_API_KEY CODEX_INTEGRATION_TEST=1 npx tsx --test lib/codex/integrat
 - Ollama retained as an unconnected adapter only
 
 The working context is bounded to roughly 12,000 estimated tokens. The active root-to-leaf path is automatic; pins and `@` references add only the ancestry required for the chosen node, never an entire sibling tree.
+
+## Star history
+
+[![Nested GitHub stars](https://img.shields.io/github/stars/AcastaPaloma/nested?style=for-the-badge&logo=github&label=Nested%20stars)](https://www.star-history.com/#AcastaPaloma/nested&Date)
+
+Click the badge to open Nested in [Star History](https://www.star-history.com/#AcastaPaloma/nested&Date). The graph will populate as the repository collects stars. ⭐
+
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a change. By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md). Please report security issues privately as described in [SECURITY.md](SECURITY.md).
+
+## License
+
+Nested is available under the [MIT License](LICENSE).
