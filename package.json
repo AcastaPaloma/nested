@@ -2,15 +2,29 @@
   "name": "nested",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AcastaPaloma/nested.git"
+  },
+  "bugs": {
+    "url": "https://github.com/AcastaPaloma/nested/issues"
+  },
+  "homepage": "https://github.com/AcastaPaloma/nested#readme",
   "scripts": {
     "dev": "next dev",
+    "local": "tsx scripts/local.ts",
+    "local:dev": "tsx scripts/local.ts --dev",
+    "import:hosted": "tsx scripts/import-hosted.ts",
     "build": "next build",
+    "companion": "tsx companion/cli.ts",
+    "companion:install": "tsx companion/install.ts",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "tsx --test app/flow/context.test.ts lib/codex/*.test.ts lib/companion/*.test.ts lib/local/*.test.ts lib/markdown/*.test.ts"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.8",
-    "@google/genai": "^1.34.0",
     "@radix-ui/react-slot": "^1.2.4",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.89.0",
@@ -21,8 +35,9 @@
     "katex": "^0.16.27",
     "lucide-react": "^0.562.0",
     "motion": "^12.26.1",
-    "next": "16.1.0",
+    "next": "^16.2.10",
     "ollama": "^0.6.3",
+    "radix-ui": "^1.6.2",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-markdown": "^10.1.0",
@@ -37,8 +52,9 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.1.0",
+    "eslint-config-next": "^16.2.10",
     "tailwindcss": "^4",
+    "tsx": "^4.23.0",
     "tw-animate-css": "^1.4.0",
     "typescript": "^5"
   }

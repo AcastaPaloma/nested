@@ -1,5 +1,10 @@
 import { createClient } from "@/utils/supabase/server";
+import { createAdminClient } from "@/utils/supabase/admin";
 import { NextRequest, NextResponse } from "next/server";
+import { threadsToArchive } from "@/lib/codex/runs";
+import { getCodexAppServer } from "@/lib/codex/app-server";
+import { isLocalMode } from "@/lib/local/mode";
+import { localStore } from "@/lib/local/store";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -8,8 +13,13 @@ type RouteContext = {
 // GET /api/conversations/[id] - Get a single conversation with all messages
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
-    const supabase = await createClient();
     const { id } = await context.params;
+    if (isLocalMode()) {
+      const bundle = await localStore.getConversationBundle(id);
+      if (!bundle.conversation) return NextResponse.json({ error: "Conversation not found" }, { status: 404 });
+      return NextResponse.json(bundle);
+    }
+    const supabase = await createClient();
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -44,6 +54,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     // Get all message references for this conversation's messages
     const messageIds = messages?.map((m) => m.id) || [];
     let references: Array<{ source_message_id: string; target_message_id: string }> = [];
+    let links: Array<{ source_message_id: string; target_message_id: string }> = [];
 
     if (messageIds.length > 0) {
       const { data: refs, error: refError } = await supabase
@@ -56,12 +67,24 @@ export async function GET(request: NextRequest, context: RouteContext) {
       } else {
         references = refs || [];
       }
+
+      const { data: storedLinks, error: linkError } = await supabase
+        .from("message_links")
+        .select("source_message_id, target_message_id")
+        .in("source_message_id", messageIds);
+
+      if (linkError) {
+        console.error("Error fetching message links:", linkError);
+      } else {
+        links = storedLinks || [];
+      }
     }
 
     return NextResponse.json({
       conversation,
       messages: messages || [],
       references,
+      links,
     });
   } catch (error) {
     console.error("Error in GET /api/conversations/[id]:", error);
@@ -75,8 +98,16 @@ export async function GET(request: NextRequest, context: RouteContext) {
 // PATCH /api/conversations/[id] - Update a conversation (rename)
 export async function PATCH(request: NextRequest, context: RouteContext) {
   try {
-    const supabase = await createClient();
     const { id } = await context.params;
+    if (isLocalMode()) {
+      const body = await request.json();
+      if (!body.name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
+      const conversation = await localStore.renameConversation(id, body.name);
+      return conversation
+        ? NextResponse.json(conversation)
+        : NextResponse.json({ error: "Conversation not found" }, { status: 404 });
+    }
+    const supabase = await createClient();
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -114,13 +145,25 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 // DELETE /api/conversations/[id] - Delete a conversation
 export async function DELETE(request: NextRequest, context: RouteContext) {
   try {
-    const supabase = await createClient();
     const { id } = await context.params;
+    if (isLocalMode()) {
+      const threadIds = await localStore.deleteConversation(id);
+      const manager = getCodexAppServer();
+      await Promise.allSettled(threadIds.map((threadId) => manager.archiveThread(threadId)));
+      return NextResponse.json({ success: true });
+    }
+    const supabase = await createClient();
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const { data: runs } = await supabase
+      .from("codex_runs")
+      .select("thread_id")
+      .eq("conversation_id", id)
+      .not("thread_id", "is", null);
 
     const { error } = await supabase
       .from("conversations")
@@ -129,6 +172,20 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    const threadIds = threadsToArchive(runs ?? []);
+    if (threadIds.length > 0) {
+      const { error: archiveError } = await createAdminClient().from("codex_jobs").insert(
+        threadIds.map((threadId) => ({
+          kind: "archive" as const,
+          user_id: user.id,
+          thread_id: threadId,
+        })),
+      );
+      if (archiveError && archiveError.code !== "23505") {
+        console.error("Unable to queue Codex thread archival:", archiveError);
+      }
     }
 
     return NextResponse.json({ success: true });

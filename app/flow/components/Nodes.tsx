@@ -13,13 +13,24 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
+import { normalizeMathDelimiters } from "@/lib/markdown/normalize-math";
+import {
+  ChevronDown,
+  ChevronRight,
+  GitBranch,
+  Maximize2,
+  Pencil,
+  Pin,
+  Plus,
+} from "lucide-react";
 import type { FlowNodeData, TreePalette } from "../types";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 // Markdown renderer component with proper styling and LaTeX support
-function MarkdownContent({ content }: { content: string }) {
+export function MarkdownContent({ content }: { content: string }) {
   return (
-    <div className="prose prose-sm max-w-none wrap-break-word" style={{ fontFamily: 'var(--font-dotgothic16)' }}>
+    <div className="prose prose-sm max-w-none wrap-break-word">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex]}
@@ -78,7 +89,7 @@ function MarkdownContent({ content }: { content: string }) {
           ),
         }}
       >
-        {content}
+        {normalizeMathDelimiters(content)}
       </ReactMarkdown>
     </div>
   );
@@ -96,6 +107,73 @@ function CollapsedContent({
   return (
     <div className={`px-3 py-2 ${palette.accent} rounded-b-lg`}>
       <p className={`text-xs ${palette.text} italic`}>{summary}</p>
+    </div>
+  );
+}
+
+function NodeActions({
+  messageId,
+  isCollapsed,
+  palette,
+  onOpen,
+  onToggleCollapse,
+  onToggleBranch,
+  childCount = 0,
+  hiddenDescendantCount = 0,
+}: Pick<
+  FlowNodeData,
+  "onOpen" | "onToggleCollapse" | "onToggleBranch" | "childCount" | "hiddenDescendantCount"
+> & {
+  messageId: string;
+  isCollapsed: boolean;
+  palette: TreePalette;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      {childCount > 0 && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={hiddenDescendantCount > 0 ? "secondary" : "ghost"}
+              size="icon-sm"
+              onClick={() => onToggleBranch?.(messageId)}
+              className={palette.text}
+              aria-label={hiddenDescendantCount > 0 ? `Show ${hiddenDescendantCount} hidden messages` : "Hide replies"}
+            >
+              <GitBranch />
+              {hiddenDescendantCount > 0 && (
+                <span className="ml-0.5 text-[10px] font-semibold tabular-nums">{hiddenDescendantCount}</span>
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {hiddenDescendantCount > 0 ? `Show ${hiddenDescendantCount} hidden messages` : "Collapse this branch"}
+          </TooltipContent>
+        </Tooltip>
+      )}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => onOpen?.(messageId)}
+            className={palette.text}
+            aria-label="Open full message"
+          >
+            <Maximize2 />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>Open full message</TooltipContent>
+      </Tooltip>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        onClick={() => onToggleCollapse?.(messageId)}
+        className={palette.text}
+        aria-label={isCollapsed ? "Expand message preview" : "Collapse message preview"}
+      >
+        {isCollapsed ? <ChevronRight /> : <ChevronDown />}
+      </Button>
     </div>
   );
 }
@@ -149,12 +227,18 @@ export const UserNode = memo(function UserNode({
     message,
     onEdit,
     onToggleCollapse,
+    onToggleBranch,
+    onOpen,
     isLastInBranch,
     shortLabel,
     treeLabel,
     isRoot,
     treeSummary,
     palette,
+    onToggleContextPin,
+    isContextPinned,
+    childCount,
+    hiddenDescendantCount,
   } = data;
   const [showPreview, setShowPreview] = useState(false);
   const isCollapsed = message.isCollapsed ?? false;
@@ -200,15 +284,14 @@ export const UserNode = memo(function UserNode({
         />
       )}
 
-      {/* Target handle - top (not shown on root) */}
-      {!isRoot && (
-        <Handle
-          type="target"
-          position={Position.Top}
-          style={{ background: palette.handle }}
-          className="w-3! h-3! border-2! border-white!"
-        />
-      )}
+      {/* Every thought can receive an intentional context link, including roots. */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        style={{ background: palette.handle }}
+        className="w-3! h-3! border-2! border-white!"
+        title="Drop a context link here"
+      />
 
       {/* Header */}
       <div
@@ -228,13 +311,30 @@ export const UserNode = memo(function UserNode({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => onToggleCollapse?.(message.id)}
-            className={`text-xs ${palette.text} hover:opacity-70 px-1`}
-            title={isCollapsed ? "Expand" : "Collapse"}
-          >
-            {isCollapsed ? "▶" : "▼"}
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => onToggleContextPin?.(message.id)}
+                className={isContextPinned ? palette.text : "text-muted-foreground"}
+                aria-label={isContextPinned ? "Remove from persistent context" : "Pin to persistent context"}
+              >
+                <Pin className={isContextPinned ? "fill-current" : ""} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{isContextPinned ? "Unpin from context" : "Keep in context"}</TooltipContent>
+          </Tooltip>
+          <NodeActions
+            messageId={message.id}
+            isCollapsed={isCollapsed}
+            palette={palette}
+            onOpen={onOpen}
+            onToggleCollapse={onToggleCollapse}
+            onToggleBranch={onToggleBranch}
+            childCount={childCount}
+            hiddenDescendantCount={hiddenDescendantCount}
+          />
         </div>
       </div>
 
@@ -242,7 +342,7 @@ export const UserNode = memo(function UserNode({
       {isCollapsed ? (
         <CollapsedContent content={message.content} palette={palette} />
       ) : (
-        <div className="px-3 py-2 overflow-hidden flex-1 min-h-0">
+        <div className="nowheel px-3 py-2 overflow-y-auto flex-1 min-h-0">
           <MarkdownContent content={message.content} />
           {message.branchReferences.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
@@ -261,13 +361,15 @@ export const UserNode = memo(function UserNode({
 
       {/* Actions */}
       {!isCollapsed && isLastInBranch && onEdit && (
-        <div className={`px-3 py-2 border-t ${palette.border}`}>
-          <button
+        <div className={`flex items-center px-3 py-2 border-t ${palette.border}`}>
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => onEdit(message.id)}
-            className={`text-xs ${palette.text} hover:opacity-70 transition-colors`}
+            className={`h-7 px-2 text-xs ${palette.text}`}
           >
-            Edit
-          </button>
+            <Pencil /> Edit branch
+          </Button>
         </div>
       )}
 
@@ -287,7 +389,19 @@ export const AgentNode = memo(function AgentNode({
   data,
   selected,
 }: NodeProps<Node<FlowNodeData>>) {
-  const { message, onReply, onToggleCollapse, shortLabel, palette } = data;
+  const {
+    message,
+    onReply,
+    onOpen,
+    onToggleCollapse,
+    onToggleBranch,
+    onToggleContextPin,
+    isContextPinned,
+    shortLabel,
+    palette,
+    childCount,
+    hiddenDescendantCount,
+  } = data;
   const isCollapsed = message.isCollapsed ?? false;
 
   // Streaming state - show thinking animation
@@ -393,13 +507,30 @@ export const AgentNode = memo(function AgentNode({
           <span className={`text-xs font-medium ${palette.text}`}>Agent</span>
         </div>
         <div className="flex items-center gap-1">
-          <button
-            onClick={() => onToggleCollapse?.(message.id)}
-            className={`text-xs ${palette.text} hover:opacity-70 px-1`}
-            title={isCollapsed ? "Expand" : "Collapse"}
-          >
-            {isCollapsed ? "▶" : "▼"}
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => onToggleContextPin?.(message.id)}
+                className={isContextPinned ? "text-foreground" : "text-muted-foreground"}
+                aria-label={isContextPinned ? "Remove from persistent context" : "Pin to persistent context"}
+              >
+                <Pin className={isContextPinned ? "fill-current" : ""} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{isContextPinned ? "Unpin from context" : "Keep in context"}</TooltipContent>
+          </Tooltip>
+          <NodeActions
+            messageId={message.id}
+            isCollapsed={isCollapsed}
+            palette={palette}
+            onOpen={onOpen}
+            onToggleCollapse={onToggleCollapse}
+            onToggleBranch={onToggleBranch}
+            childCount={childCount}
+            hiddenDescendantCount={hiddenDescendantCount}
+          />
         </div>
       </div>
 
@@ -407,7 +538,7 @@ export const AgentNode = memo(function AgentNode({
       {isCollapsed ? (
         <CollapsedContent content={message.content} palette={palette} />
       ) : (
-        <div className="px-3 py-2 overflow-hidden flex-1 min-h-0">
+        <div className="nowheel px-3 py-2 overflow-y-auto flex-1 min-h-0">
           <MarkdownContent content={message.content} />
         </div>
       )}
@@ -415,12 +546,22 @@ export const AgentNode = memo(function AgentNode({
       {/* Actions - only agents can be replied to */}
       {!isCollapsed && onReply && (
         <div className={`px-3 py-2 border-t ${palette.border}`}>
-          <button
+          <Button
+            variant="ghost"
+            size="sm"
             onClick={() => onReply(message.id)}
-            className={`text-xs ${palette.text} hover:opacity-70 transition-colors`}
+            className={`h-7 px-2 text-xs ${palette.text}`}
           >
-            Reply
-          </button>
+            <Plus /> Continue from here
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onOpen?.(message.id)}
+            className="ml-auto h-7 px-2 text-xs text-muted-foreground"
+          >
+            <Maximize2 /> Full response
+          </Button>
         </div>
       )}
 

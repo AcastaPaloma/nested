@@ -12,7 +12,7 @@ export default function MediaBetweenTextHead({ onImageHover }: MediaBetweenTextH
   const screenSize = useScreenSize()
 
   return (
-    <div className="w-dvw h-dvh flex flex-col items-center justify-center bg-black relative z-10" style={{ fontFamily: 'var(--font-majormonodisplay)' }}>
+    <div className="w-dvw h-dvh flex flex-col items-center justify-center bg-black relative z-10">
       <div className="flex flex-row flex-wrap items-center justify-center px-4 gap-1 sm:gap-2">
         <a
           href="https://www.instagram.com/p/C3oL4euoc2l/?img_index=1"

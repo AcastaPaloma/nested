@@ -100,7 +100,59 @@ export const ReferenceEdge = memo(function ReferenceEdge({
   );
 });
 
+// Context Edge - an intentional, editable link between two thoughts. It is
+// separate from a historical prompt reference: following it is what prepares
+// the target's ancestry as context when the source node is continued.
+export const ContextEdge = memo(function ContextEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style = {},
+}: EdgeProps<Edge<FlowEdgeData>>) {
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+    borderRadius: 16,
+  });
+
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={edgePath}
+        style={{
+          ...style,
+          strokeWidth: 2,
+          stroke: "#0f766e",
+          strokeDasharray: "3 5",
+        }}
+      />
+      <EdgeLabelRenderer>
+        <span
+          style={{
+            position: "absolute",
+            transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+            pointerEvents: "none",
+          }}
+          className="rounded-full border border-teal-200 bg-white px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-teal-700 shadow-sm"
+        >
+          context
+        </span>
+      </EdgeLabelRenderer>
+    </>
+  );
+});
+
 export const edgeTypes = {
   reply: ReplyEdge,
   reference: ReferenceEdge,
+  context: ContextEdge,
 };

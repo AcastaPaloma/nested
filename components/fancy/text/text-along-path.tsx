@@ -1,4 +1,4 @@
-import { RefObject, useEffect, useRef } from "react"
+import { RefObject, useEffect, useId, useRef } from "react"
 import { useScroll, UseScrollOptions, useTransform } from "motion/react"
 
 type PreserveAspectRatioAlign =
@@ -90,10 +90,9 @@ const AnimatedPathText = ({
   scrollTransformValues = [0, 100],
 }: AnimatedPathTextProps) => {
   const textPathRefs = useRef<SVGTextPathElement[]>([])
+  const generatedId = useId()
 
-  // naive id for the path. you should rather use yours :)
-  const id =
-    pathId || `animated-path-${Math.random().toString(36).substring(7)}`
+  const id = pathId || `animated-path-${generatedId.replaceAll(":", "")}`
 
   const { scrollYProgress } = useScroll({
     ...(scrollContainer && { container: scrollContainer }),

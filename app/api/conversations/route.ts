@@ -1,9 +1,12 @@
 import { createClient } from "@/utils/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import { isLocalMode } from "@/lib/local/mode";
+import { localStore } from "@/lib/local/store";
 
 // GET /api/conversations - List all conversations for the current user
 export async function GET() {
   try {
+    if (isLocalMode()) return NextResponse.json(await localStore.listConversations());
     const supabase = await createClient();
 
     const { data: { user } } = await supabase.auth.getUser();
@@ -34,6 +37,13 @@ export async function GET() {
 // POST /api/conversations - Create a new conversation
 export async function POST(request: NextRequest) {
   try {
+    if (isLocalMode()) {
+      const body = await request.json().catch(() => ({}));
+      return NextResponse.json(
+        await localStore.createConversation(body.name || "Untitled Conversation"),
+        { status: 201 },
+      );
+    }
     const supabase = await createClient();
 
     const { data: { user } } = await supabase.auth.getUser();

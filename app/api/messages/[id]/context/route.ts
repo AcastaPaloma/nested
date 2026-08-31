@@ -1,6 +1,8 @@
 import { createClient } from "@/utils/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
 import type { Message } from "@/lib/database.types";
+import { isLocalMode } from "@/lib/local/mode";
+import { localStore } from "@/lib/local/store";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -10,8 +12,14 @@ type RouteContext = {
 // This traverses from root to the current message, plus any referenced branches
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
-    const supabase = await createClient();
     const { id } = await context.params;
+    if (isLocalMode()) {
+      const result = await localStore.getContext(id);
+      return result
+        ? NextResponse.json(result)
+        : NextResponse.json({ error: "Message not found" }, { status: 404 });
+    }
+    const supabase = await createClient();
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {

@@ -13,7 +13,7 @@ export default function ScrollTextAlongPath() {
 
   // Split text into multiple lines
   const texts = [
-    "chatgpt. claude. gemini.",
+    "one chat becomes a hundred tabs.",
     "honestly it's the same shit.",
     "you create new convos every time. ",
     "no organization at all. no way to find your work.",
@@ -22,7 +22,6 @@ export default function ScrollTextAlongPath() {
   return (
     <div
       className="w-full h-[200vh] relative bg-black z-10"
-      style={{ fontFamily: 'var(--font-majormonodisplay)' }}
     >
       <div className="sticky w-full top-0 h-screen flex items-center">
         <div className="w-full h-full relative">
