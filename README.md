@@ -49,6 +49,22 @@ npm run local -- --workspace /absolute/path/to/your/project
 
 Use `npm run local:dev` while changing Nested itself. Add `--no-open` to either command when you do not want the launcher to open a browser.
 
+### Import existing hosted boards
+
+The import is read-only and idempotently merges hosted boards into the local data file. It never deletes or changes the hosted originals. If this computer is already paired with the hosted app, run:
+
+```bash
+npm run import:hosted
+```
+
+The importer uses `~/.config/nested/companion.json` to authenticate only as the paired user. A server administrator can instead provide the hosted Supabase environment; when that database contains multiple conversation owners, select the account explicitly:
+
+```bash
+npm run import:hosted -- --email you@example.com
+```
+
+The service-role key must remain server-only; never place it in a `NEXT_PUBLIC_` variable or commit it to Git.
+
 ## Hosted deployment and companion
 
 The Vercel/Supabase deployment remains supported. In hosted mode, open Nested, choose **Connect your Codex**, create a pairing command, and run that command from this project directory. The companion starts `codex app-server` and stays attached while you use Nested.

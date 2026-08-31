@@ -26,6 +26,15 @@ export type LocalRun = {
   updated_at: string;
 };
 
+export type LocalImportSnapshot = {
+  conversations: Conversation[];
+  messages: Message[];
+  references: Array<{ source_message_id: string; target_message_id: string }>;
+  links: Array<{ source_message_id: string; target_message_id: string }>;
+  positions: Array<{ conversation_id: string; message_id: string } & LocalPosition>;
+  runs: LocalRun[];
+};
+
 type LocalData = {
   version: 1;
   conversations: Conversation[];
@@ -105,6 +114,63 @@ const byCreatedAt = <T extends { created_at: string }>(a: T, b: T) =>
 
 export const localStore = {
   dataFile,
+
+  importSnapshot: (snapshot: LocalImportSnapshot) => mutateStore((data) => {
+    const before = {
+      conversations: data.conversations.length,
+      messages: data.messages.length,
+      references: data.references.length,
+      links: data.links.length,
+      positions: Object.values(data.positions).reduce((total, positions) => total + Object.keys(positions).length, 0),
+      runs: data.runs.length,
+    };
+    const mergeById = <T extends { id: string }>(current: T[], incoming: T[]) => {
+      const merged = new Map(current.map((item) => [item.id, item]));
+      for (const item of incoming) merged.set(item.id, item);
+      return [...merged.values()];
+    };
+    const mergePair = <T extends { source_message_id: string; target_message_id: string }>(current: T[], incoming: T[]) => {
+      const merged = new Map(current.map((item) => [`${item.source_message_id}:${item.target_message_id}`, item]));
+      for (const item of incoming) merged.set(`${item.source_message_id}:${item.target_message_id}`, item);
+      return [...merged.values()];
+    };
+
+    data.conversations = mergeById(
+      data.conversations,
+      snapshot.conversations.map((conversation) => ({ ...conversation, user_id: "local" })),
+    );
+    data.messages = mergeById(data.messages, snapshot.messages);
+    data.references = mergePair(data.references, snapshot.references);
+    data.links = mergePair(data.links, snapshot.links);
+    data.runs = mergeById(data.runs, snapshot.runs);
+    for (const { conversation_id, message_id, ...position } of snapshot.positions) {
+      const positions = data.positions[conversation_id] ?? {};
+      positions[message_id] = position;
+      data.positions[conversation_id] = positions;
+    }
+
+    const after = {
+      conversations: data.conversations.length,
+      messages: data.messages.length,
+      references: data.references.length,
+      links: data.links.length,
+      positions: Object.values(data.positions).reduce((total, positions) => total + Object.keys(positions).length, 0),
+      runs: data.runs.length,
+    };
+    return {
+      imported: {
+        conversations: snapshot.conversations.length,
+        messages: snapshot.messages.length,
+        references: snapshot.references.length,
+        links: snapshot.links.length,
+        positions: snapshot.positions.length,
+        runs: snapshot.runs.length,
+      },
+      added: Object.fromEntries(Object.keys(after).map((key) => [key, after[key as keyof typeof after] - before[key as keyof typeof before]])),
+      totals: after,
+      dataFile: dataFile(),
+    };
+  }),
 
   listConversations: () => readStore((data) =>
     [...data.conversations].sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())),
