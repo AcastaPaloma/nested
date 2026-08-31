@@ -84,7 +84,7 @@ export type FlowNodeData = {
 };
 
 // Edge types
-export type EdgeType = "reply" | "reference";
+export type EdgeType = "reply" | "reference" | "context";
 
 export type FlowEdgeData = {
   edgeType: EdgeType;

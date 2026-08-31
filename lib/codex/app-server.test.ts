@@ -5,12 +5,34 @@ import test from "node:test";
 import { CodexAppServer } from "./app-server";
 
 const fixture = fileURLToPath(new URL("./fixtures/fake-app-server.mjs", import.meta.url));
+const workspaceDirectory = "/tmp/nested-test-workspace";
 const createManager = (options: { timeout?: number; restart?: number } = {}) =>
   new CodexAppServer({
     childFactory: () => spawn(process.execPath, [fixture], { stdio: ["pipe", "pipe", "pipe"] }),
     requestTimeoutMs: options.timeout ?? 1_000,
     restartDelayMs: options.restart ?? 20,
+    workspaceDirectory,
   });
+
+test("starts threads with the complete local Codex tool harness", async () => {
+  const manager = createManager();
+  await manager.startThread("fake-model");
+  const options = await manager.request<Record<string, unknown>>("test/lastThreadOptions");
+  assert.equal(options.cwd, workspaceDirectory);
+  assert.deepEqual(options.runtimeWorkspaceRoots, [workspaceDirectory]);
+  assert.equal(options.sandbox, "workspace-write");
+  assert.equal(options.approvalPolicy, "on-request");
+  assert.equal(options.approvalsReviewer, "auto_review");
+  assert.deepEqual(options.config, {
+    web_search: "live",
+    tools: { web_search: true, view_image: true },
+    features: { shell_tool: true, unified_exec: true },
+    sandbox_workspace_write: { network_access: true },
+  });
+  assert.match(String(options.developerInstructions), /Use the available local, web, skill, plugin, and MCP tools/);
+  assert.equal("environments" in options, false);
+  manager.stop();
+});
 
 test("correlates out-of-order JSON-RPC responses and ignores malformed lines", async () => {
   const manager = createManager();
@@ -39,6 +61,30 @@ test("streams agent deltas through turn completion", async () => {
   });
   assert.deepEqual(await result.completion, { status: "completed", error: null });
   assert.equal(deltas.join(""), "hello world");
+  const options = await manager.request<Record<string, unknown>>("test/lastTurnOptions");
+  assert.equal(options.approvalPolicy, "on-request");
+  assert.equal(options.approvalsReviewer, "auto_review");
+  assert.equal(options.cwd, workspaceDirectory);
+  assert.deepEqual(options.collaborationMode, {
+    mode: "default",
+    settings: {
+      model: "fake-model",
+      developer_instructions: options.collaborationMode &&
+        typeof options.collaborationMode === "object" &&
+        "settings" in options.collaborationMode
+          ? (options.collaborationMode.settings as { developer_instructions: string }).developer_instructions
+          : null,
+    },
+  });
+  assert.match(
+    String((options.collaborationMode as { settings: { developer_instructions: string } }).settings.developer_instructions),
+    /Use the available local, web, skill, plugin, and MCP tools/
+  );
+  assert.deepEqual(options.sandboxPolicy, {
+    type: "workspaceWrite",
+    writableRoots: [workspaceDirectory],
+    networkAccess: true,
+  });
   manager.stop();
 });
 
@@ -69,4 +115,3 @@ test("restarts after an app-server crash", async () => {
   assert.equal(await manager.request<string>("echo", { value: "restarted" }), "restarted");
   manager.stop();
 });
-

@@ -2,7 +2,7 @@ import { getCreatedAt, getParentId, type MessageLike } from "./types";
 
 export const DEFAULT_CONTEXT_BUDGET = 12_000;
 
-export type ContextSource = "path" | "pin";
+export type ContextSource = "path" | "pin" | "link";
 
 export type ContextEntry<T extends MessageLike> = {
   message: T;
@@ -43,12 +43,14 @@ export function buildContextPlan<T extends MessageLike>({
   messages,
   activeNodeId,
   pinnedNodeIds,
+  linkedNodeIds = [],
   draft = "",
   budget = DEFAULT_CONTEXT_BUDGET,
 }: {
   messages: T[];
   activeNodeId: string | null;
   pinnedNodeIds: string[];
+  linkedNodeIds?: string[];
   draft?: string;
   budget?: number;
 }): ContextPlan<T> {
@@ -56,10 +58,14 @@ export function buildContextPlan<T extends MessageLike>({
   const activePath = getPath(messagesById, activeNodeId);
   const activeIds = new Set(activePath.map((message) => message.id));
   const pinnedPaths = pinnedNodeIds.flatMap((id) => getPath(messagesById, id));
+  const linkedPaths = linkedNodeIds.flatMap((id) => getPath(messagesById, id));
 
   const candidates = new Map<string, ContextEntry<T>>();
   for (const message of pinnedPaths) {
     candidates.set(message.id, { message, source: "pin" });
+  }
+  for (const message of linkedPaths) {
+    if (!candidates.has(message.id)) candidates.set(message.id, { message, source: "link" });
   }
   for (const message of activePath) {
     candidates.set(message.id, { message, source: "path" });
@@ -70,6 +76,7 @@ export function buildContextPlan<T extends MessageLike>({
   const priority = [
     ...activePath.slice().reverse(),
     ...pinnedNodeIds.flatMap((id) => getPath(messagesById, id).slice().reverse()),
+    ...linkedNodeIds.flatMap((id) => getPath(messagesById, id).slice().reverse()),
   ];
 
   for (const message of priority) {
@@ -84,7 +91,10 @@ export function buildContextPlan<T extends MessageLike>({
   const included = [...candidates.values()]
     .filter(({ message }) => selected.has(message.id))
     .sort((a, b) => {
-      if (a.source !== b.source) return a.source === "pin" ? -1 : 1;
+      if (a.source !== b.source) {
+        const priority = { pin: 0, link: 1, path: 2 };
+        return priority[a.source] - priority[b.source];
+      }
       return getCreatedAt(a.message) - getCreatedAt(b.message);
     });
 

@@ -27,6 +27,7 @@ type InputBarProps = {
   treeLabels: Map<string, string>;
   replyingTo: string | null;
   pinnedMessageIds: string[];
+  linkedMessageIds: string[];
   onTogglePin: (id: string) => void;
   onCancelReply: () => void;
   disabled?: boolean;
@@ -39,6 +40,7 @@ export function InputBar({
   treeLabels,
   replyingTo,
   pinnedMessageIds,
+  linkedMessageIds,
   onTogglePin,
   onCancelReply,
   disabled = false,
@@ -81,18 +83,19 @@ export function InputBar({
     [parseReferences, value]
   );
   const allReferences = useMemo(
-    () => [...new Set([...pinnedMessageIds, ...typedReferences])],
-    [pinnedMessageIds, typedReferences]
+    () => [...new Set([...pinnedMessageIds, ...linkedMessageIds, ...typedReferences])],
+    [linkedMessageIds, pinnedMessageIds, typedReferences]
   );
   const contextPlan = useMemo(
     () =>
       buildContextPlan({
         messages,
         activeNodeId: replyingTo,
-        pinnedNodeIds: allReferences,
+        pinnedNodeIds: [...new Set([...pinnedMessageIds, ...typedReferences])],
+        linkedNodeIds: linkedMessageIds,
         draft: value,
       }),
-    [allReferences, messages, replyingTo, value]
+    [linkedMessageIds, messages, pinnedMessageIds, replyingTo, typedReferences, value]
   );
 
   const filteredMessages = useMemo(() => {
@@ -251,7 +254,7 @@ export function InputBar({
                 <SheetHeader className="border-b">
                   <SheetTitle>Context for the next response</SheetTitle>
                   <SheetDescription>
-                    Only this material is sent. Press Esc or click outside to close.
+                    Only this material is sent to Codex. Press Esc or click outside to close.
                   </SheetDescription>
                 </SheetHeader>
                 <div className="space-y-3 px-4 py-4">
@@ -263,7 +266,7 @@ export function InputBar({
                   </div>
                   <Progress value={usage} />
                   <p className="text-xs leading-5 text-muted-foreground">
-                    The active path is automatic. Pins and @mentions add only the ancestry needed to understand that exact node—not its sibling branches.
+                    The active path is automatic. Pins, @mentions, and context links add only the ancestry needed to understand that exact node—not sibling branches.
                   </p>
                 </div>
                 <Separator />
@@ -278,7 +281,7 @@ export function InputBar({
                       <div key={message.id} className="rounded-xl border bg-card p-3 text-card-foreground">
                         <div className="mb-2 flex items-center gap-2">
                           <Badge variant={source === "path" ? "secondary" : "outline"}>
-                            {source === "path" ? "Active path" : "Pinned path"}
+                            {source === "path" ? "Active path" : source === "pin" ? "Pinned path" : "Linked path"}
                           </Badge>
                           <span className="font-mono text-xs text-muted-foreground">
                             {shortLabels.get(message.id)}

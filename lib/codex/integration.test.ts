@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { CodexAppServer } from "./app-server";
 
-test("local Codex ChatGPT integration", { skip: process.env.CODEX_INTEGRATION_TEST !== "1", timeout: 120_000 }, async () => {
-  const manager = new CodexAppServer({ requestTimeoutMs: 30_000 });
+test("local Codex ChatGPT integration", { skip: process.env.CODEX_INTEGRATION_TEST !== "1", timeout: 180_000 }, async () => {
+  const manager = new CodexAppServer({ requestTimeoutMs: 30_000, workspaceDirectory: process.cwd() });
   const threadIds: string[] = [];
   try {
     const status = await manager.getStatus();
@@ -19,12 +19,24 @@ test("local Codex ChatGPT integration", { skip: process.env.CODEX_INTEGRATION_TE
     const threadId = await manager.startThread(model);
     threadIds.push(threadId);
     let output = "";
+    const itemTypes = new Set<string>();
     const first = await manager.streamTurn({
-      threadId, text: "Reply with exactly: nested smoke test", model,
+      threadId,
+      text: [
+        "This is a tool-harness smoke test.",
+        "You must use live web search once and use the shell once to run `printf NESTED_SHELL_OK`.",
+        "Then reply briefly with the marker NESTED_SHELL_OK and one web fact you found.",
+      ].join(" "),
+      model,
       clientUserMessageId: crypto.randomUUID(), onDelta: (delta) => { output += delta; },
+      onItem: ({ item }) => {
+        if (typeof item.type === "string") itemTypes.add(item.type);
+      },
     });
     assert.equal((await first.completion).status, "completed");
-    assert.ok(output.length > 0);
+    assert.match(output, /NESTED_SHELL_OK/);
+    assert.ok(itemTypes.has("commandExecution"), `Missing commandExecution item: ${[...itemTypes].join(", ")}`);
+    assert.ok(itemTypes.has("webSearch"), `Missing webSearch item: ${[...itemTypes].join(", ")}`);
 
     const forkId = await manager.forkThread(threadId, first.turnId, model);
     threadIds.push(forkId);

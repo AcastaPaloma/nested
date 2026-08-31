@@ -2,6 +2,10 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function updateSession(request: NextRequest) {
+  if (process.env.NESTED_LOCAL_MODE === "1") {
+    return NextResponse.next({ request });
+  }
+
   // Let a fresh checkout render the setup screen instead of failing in auth.
   if (
     !process.env.NEXT_PUBLIC_SUPABASE_URL ||

@@ -1,16 +1,11 @@
 import { createClient } from "@/utils/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import { isLocalMode } from "@/lib/local/mode";
+import { localStore } from "@/lib/local/store";
 
 // POST /api/messages - Create a new message
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createClient();
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const body = await request.json();
     const {
       conversation_id,
@@ -29,6 +24,27 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    if (isLocalMode()) {
+      if (role !== "user" && role !== "assistant") {
+        return NextResponse.json({ error: "role must be user or assistant" }, { status: 400 });
+      }
+      const message = await localStore.createMessage({
+        conversation_id,
+        parent_id: parent_id || null,
+        role,
+        content,
+        model: model || null,
+        provider: provider || null,
+      }, branch_references);
+      return message
+        ? NextResponse.json(message, { status: 201 })
+        : NextResponse.json({ error: "Conversation not found" }, { status: 404 });
+    }
+
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     // Verify conversation belongs to user
     const { data: conv } = await supabase
@@ -93,13 +109,6 @@ export async function POST(request: NextRequest) {
 // PATCH /api/messages - Update a message (mainly for streaming content updates)
 export async function PATCH(request: NextRequest) {
   try {
-    const supabase = await createClient();
-
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const body = await request.json();
     const { id, content } = body;
 
@@ -109,6 +118,17 @@ export async function PATCH(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    if (isLocalMode()) {
+      const message = await localStore.updateMessage(id, content);
+      return message
+        ? NextResponse.json(message)
+        : NextResponse.json({ error: "Message not found" }, { status: 404 });
+    }
+
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { data: message, error } = await supabase
       .from("messages")

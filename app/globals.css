@@ -47,6 +47,13 @@
   --radius-4xl: calc(var(--radius) + 16px);
 }
 
+.katex-display {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.25rem;
+}
+
 /* ReactFlow selection box styling - pink dotted border */
 .react-flow__selection {
   background: rgba(255, 105, 180, 0.08) !important;

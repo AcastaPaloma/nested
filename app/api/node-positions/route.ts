@@ -1,5 +1,7 @@
 import { createClient } from "@/utils/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import { isLocalMode } from "@/lib/local/mode";
+import { localStore } from "@/lib/local/store";
 
 type PositionInput = {
   message_id: string;
@@ -14,6 +16,9 @@ function isFiniteNumber(value: unknown): value is number {
 }
 
 export async function GET(request: NextRequest) {
+  const conversationId = request.nextUrl.searchParams.get("conversation_id");
+  if (!conversationId) return NextResponse.json({ error: "conversation_id is required" }, { status: 400 });
+  if (isLocalMode()) return NextResponse.json(await localStore.getPositions(conversationId));
   const supabase = await createClient();
   const {
     data: { user },
@@ -21,11 +26,6 @@ export async function GET(request: NextRequest) {
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const conversationId = request.nextUrl.searchParams.get("conversation_id");
-  if (!conversationId) {
-    return NextResponse.json({ error: "conversation_id is required" }, { status: 400 });
   }
 
   const { data, error } = await supabase
@@ -53,15 +53,6 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
   const body = (await request.json()) as {
     conversation_id?: string;
     positions?: PositionInput[];
@@ -90,6 +81,15 @@ export async function POST(request: NextRequest) {
   if (body.positions.length === 0) {
     return NextResponse.json({ success: true });
   }
+
+  if (isLocalMode()) {
+    await localStore.savePositions(body.conversation_id, body.positions);
+    return NextResponse.json({ success: true });
+  }
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const rows = body.positions.map((position) => ({
     conversation_id: body.conversation_id!,

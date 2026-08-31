@@ -1,5 +1,7 @@
 import { createClient } from "@/utils/supabase/server";
 import { NextRequest, NextResponse } from "next/server";
+import { isLocalMode } from "@/lib/local/mode";
+import { localStore } from "@/lib/local/store";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
@@ -8,8 +10,12 @@ type RouteContext = {
 // DELETE /api/messages/[id] - Delete a message (cascades to children)
 export async function DELETE(request: NextRequest, context: RouteContext) {
   try {
-    const supabase = await createClient();
     const { id } = await context.params;
+    if (isLocalMode()) {
+      await localStore.deleteMessageTree(id);
+      return NextResponse.json({ success: true });
+    }
+    const supabase = await createClient();
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
@@ -39,8 +45,14 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
 // GET /api/messages/[id] - Get a single message
 export async function GET(request: NextRequest, context: RouteContext) {
   try {
-    const supabase = await createClient();
     const { id } = await context.params;
+    if (isLocalMode()) {
+      const message = await localStore.getMessage(id);
+      return message
+        ? NextResponse.json(message)
+        : NextResponse.json({ error: "Message not found" }, { status: 404 });
+    }
+    const supabase = await createClient();
 
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {

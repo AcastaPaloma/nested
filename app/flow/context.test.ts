@@ -35,6 +35,19 @@ test("a pin adds only the ancestry required for that node", () => {
   assert.ok(!ids.includes("b3"));
 });
 
+test("a context link adds only its target ancestry", () => {
+  const plan = buildContextPlan({
+    messages,
+    activeNodeId: "a2",
+    pinnedNodeIds: [],
+    linkedNodeIds: ["b2"],
+  });
+
+  assert.deepEqual(plan.included.map(({ message }) => message.id), ["b1", "b2", "a1", "a2"]);
+  assert.ok(plan.included.filter(({ source }) => source === "link").length > 0);
+  assert.ok(!plan.included.some(({ message }) => message.id === "b3"));
+});
+
 test("the budget keeps the newest active message before older context", () => {
   const plan = buildContextPlan({
     messages,

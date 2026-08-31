@@ -16,12 +16,15 @@ export type ConversationWithMessages = {
   conversation: Conversation;
   messages: Message[];
   references: { source_message_id: string; target_message_id: string }[];
+  links: { source_message_id: string; target_message_id: string }[];
 };
 
 export function useConversation(conversationId: string | null) {
+  const localMode = process.env.NEXT_PUBLIC_NESTED_LOCAL_MODE === "1";
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [references, setReferences] = useState<{ source_message_id: string; target_message_id: string }[]>([]);
+  const [links, setLinks] = useState<{ source_message_id: string; target_message_id: string }[]>([]);
   const [nodePositions, setNodePositions] = useState<Record<string, NodePositionData>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,7 +36,7 @@ export function useConversation(conversationId: string | null) {
   const savePositionsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pendingPositionsRef = useRef<Record<string, NodePositionData>>({});
 
-  const supabase = useMemo(() => createClient(), []);
+  const supabase = useMemo(() => localMode ? null : createClient(), [localMode]);
 
   // Load conversation data
   const loadConversation = useCallback(async () => {
@@ -41,6 +44,7 @@ export function useConversation(conversationId: string | null) {
       setConversation(null);
       setMessages([]);
       setReferences([]);
+      setLinks([]);
       setNodePositions({});
       setIsLoading(false);
       return;
@@ -60,6 +64,7 @@ export function useConversation(conversationId: string | null) {
       setConversation(data.conversation);
       setMessages(data.messages);
       setReferences(data.references);
+      setLinks(data.links ?? []);
 
       // Load node positions
       const posResponse = await fetch(`/api/node-positions?conversation_id=${conversationId}`);
@@ -81,6 +86,7 @@ export function useConversation(conversationId: string | null) {
       setConversation(null);
       setMessages([]);
       setReferences([]);
+      setLinks([]);
       setNodePositions({});
       setError(null);
       prevConversationIdRef.current = conversationId;
@@ -92,6 +98,10 @@ export function useConversation(conversationId: string | null) {
     if (!conversationId) return;
 
     loadConversation();
+
+    // Local mode receives streaming updates directly; hosted mode also listens
+    // for companion/database changes made outside this browser tab.
+    if (!supabase) return;
 
     // Set up realtime subscription
     const channel: RealtimeChannel = supabase
@@ -148,7 +158,7 @@ export function useConversation(conversationId: string | null) {
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      void supabase.removeChannel(channel);
     };
   }, [conversationId, supabase, loadConversation]);
 
@@ -251,6 +261,48 @@ export function useConversation(conversationId: string | null) {
     return response.json();
   }, []);
 
+  const createMessageLink = useCallback(async (sourceMessageId: string, targetMessageId: string) => {
+    const response = await fetch("/api/message-links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_message_id: sourceMessageId,
+        target_message_id: targetMessageId,
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || "Failed to link messages");
+    }
+
+    const link = await response.json() as { source_message_id: string; target_message_id: string };
+    setLinks((current) => current.some(
+      (item) => item.source_message_id === link.source_message_id && item.target_message_id === link.target_message_id,
+    ) ? current : [...current, link]);
+    return link;
+  }, []);
+
+  const deleteMessageLink = useCallback(async (sourceMessageId: string, targetMessageId: string) => {
+    const response = await fetch("/api/message-links", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source_message_id: sourceMessageId,
+        target_message_id: targetMessageId,
+      }),
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => null);
+      throw new Error(data?.error || "Failed to unlink messages");
+    }
+
+    setLinks((current) => current.filter(
+      (item) => item.source_message_id !== sourceMessageId || item.target_message_id !== targetMessageId,
+    ));
+  }, []);
+
   // Save node positions (debounced to avoid too many API calls)
   const saveNodePositions = useCallback(
     (positions: Record<string, NodePositionData>) => {
@@ -317,6 +369,7 @@ export function useConversation(conversationId: string | null) {
     conversation,
     messages,
     references,
+    links,
     nodePositions,
     isLoading,
     error,
@@ -324,6 +377,8 @@ export function useConversation(conversationId: string | null) {
     updateMessage,
     deleteMessage,
     getContext,
+    createMessageLink,
+    deleteMessageLink,
     saveNodePositions,
     reload: loadConversation,
   };

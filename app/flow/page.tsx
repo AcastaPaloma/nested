@@ -5,6 +5,7 @@ import {
   ReactFlow,
   Background,
   Controls,
+  MiniMap,
   useNodesState,
   useEdgesState,
   ReactFlowProvider,
@@ -12,7 +13,9 @@ import {
   PanOnScrollMode,
   type Node,
   type Edge,
+  type Connection,
   type NodeChange,
+  type EdgeChange,
   type ReactFlowInstance,
   type Viewport,
 } from "@xyflow/react";
@@ -22,6 +25,7 @@ import { MarkdownContent, nodeTypes } from "./components/Nodes";
 import { edgeTypes } from "./components/Edges";
 import { InputBar } from "./components/InputBar";
 import { ConversationSidebar } from "./components/ConversationSidebar";
+import { SearchThoughts } from "./components/SearchThoughts";
 import { getLayoutedElements } from "./dagre-layout";
 import {
   type FlowNodeData,
@@ -47,8 +51,21 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
-import { ChevronDown, Database, PanelLeft, Plus, RefreshCw, Sparkles, Square, Terminal, X } from "lucide-react";
+import { CheckCircle2, ChevronDown, Clipboard, Database, Map as MapIcon, PanelLeft, Plus, RefreshCw, Search, Sparkles, Square, Terminal, X } from "lucide-react";
 import type { CodexStatus } from "@/lib/codex/types";
+
+type PairingStatus = {
+  paired: boolean;
+  online: boolean;
+  companion?: {
+    name: string;
+    authenticated: boolean;
+    email: string | null;
+    planType: string | null;
+    error: string | null;
+    lastSeenAt: string | null;
+  };
+};
 
 // LLM API call with streaming
 async function callLLM(
@@ -119,6 +136,7 @@ type DisplayMessage = Message & {
 };
 
 function FlowCanvas() {
+  const localMode = process.env.NEXT_PUBLIC_NESTED_LOCAL_MODE === "1";
   const { user, signOut } = useAuth();
   const {
     conversations,
@@ -159,15 +177,21 @@ function FlowCanvas() {
   const {
     messages: dbMessages,
     references,
+    links,
     nodePositions,
     isLoading: isLoadingConversation,
     addMessage,
+    updateMessage,
     deleteMessage,
     saveNodePositions,
+    createMessageLink,
+    deleteMessageLink,
   } = useConversation(currentConversationId);
 
   // Local streaming state (for messages being streamed)
-  const [streamingMessages, setStreamingMessages] = useState<Map<string, { content: string; isStreaming: boolean }>>(new Map());
+  const [streamingMessages, setStreamingMessages] = useState<Map<string, { content: string; isStreaming: boolean }>>(
+    new Map<string, { content: string; isStreaming: boolean }>(),
+  );
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set());
   const [collapsedBranches, setCollapsedBranches] = useState<Set<string>>(new Set());
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
@@ -182,9 +206,18 @@ function FlowCanvas() {
   const [codexStatus, setCodexStatus] = useState<CodexStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [showCodexSetup, setShowCodexSetup] = useState(false);
+  const [pairingStatus, setPairingStatus] = useState<PairingStatus | null>(null);
+  const [pairingToken, setPairingToken] = useState<string | null>(null);
+  const [pairingUrl, setPairingUrl] = useState("https://nested-kuan-yis-projects.vercel.app");
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [pairingCopied, setPairingCopied] = useState(false);
   const [activeAssistantId, setActiveAssistantId] = useState<string | null>(null);
   const [failedRetry, setFailedRetry] = useState<{ userMessage: Message; references: string[] } | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [linkNotice, setLinkNotice] = useState<string | null>(null);
   const lastNodeIdRef = useRef<string | null>(null);
+  const flowInstanceRef = useRef<ReactFlowInstance<Node<FlowNodeData>, Edge<FlowEdgeData>> | null>(null);
+  const pendingFocusNodeIdRef = useRef<string | null>(null);
   const hasInitialLayoutRef = useRef(false);
   const prevMessageCountRef = useRef(0);
   const prevConversationIdRef = useRef<string | null>(null);
@@ -215,6 +248,61 @@ function FlowCanvas() {
 
   useEffect(() => { void refreshCodexStatus(); }, [refreshCodexStatus]);
 
+  const refreshPairingStatus = useCallback(async () => {
+    if (localMode) {
+      const next: PairingStatus = {
+        paired: true,
+        online: Boolean(codexStatus?.connected),
+        companion: {
+          name: "This computer",
+          authenticated: Boolean(codexStatus?.authenticated),
+          email: codexStatus?.email ?? null,
+          planType: codexStatus?.planType ?? null,
+          error: codexStatus?.error ?? null,
+          lastSeenAt: new Date().toISOString(),
+        },
+      };
+      setPairingStatus(next);
+      return next;
+    }
+    const response = await fetch("/api/companion/pair", { cache: "no-store" });
+    if (!response.ok) throw new Error("Unable to read companion status");
+    const next = (await response.json()) as PairingStatus;
+    setPairingStatus(next);
+    return next;
+  }, [codexStatus, localMode]);
+
+  const createPairingToken = useCallback(async () => {
+    setPairingLoading(true);
+    try {
+      const response = await fetch("/api/companion/pair", { method: "POST" });
+      const result = (await response.json().catch(() => null)) as { token?: string; productionUrl?: string; error?: string } | null;
+      if (!response.ok || !result?.token) throw new Error(result?.error ?? "Unable to pair this Mac");
+      setPairingToken(result.token);
+      if (result.productionUrl) setPairingUrl(result.productionUrl);
+      setPairingStatus({ paired: true, online: false });
+    } catch (error) {
+      setCircularWarning(error instanceof Error ? error.message : "Unable to pair this Mac");
+    } finally {
+      setPairingLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showCodexSetup) return;
+    void refreshPairingStatus().catch(() => undefined);
+    const timer = window.setInterval(() => {
+      void Promise.all([refreshPairingStatus(), refreshCodexStatus(true)]).then(([pairing]) => {
+        if (pairing.online && pairing.companion?.authenticated) setPairingToken(null);
+      }).catch(() => undefined);
+    }, 2_500);
+    return () => window.clearInterval(timer);
+  }, [refreshCodexStatus, refreshPairingStatus, showCodexSetup]);
+
+  const pairingCommand = pairingToken
+    ? `npm run companion -- --pair --url ${pairingUrl}`
+    : "";
+
   // Clear local state when conversation changes
   useEffect(() => {
     if (prevConversationIdRef.current !== currentConversationId) {
@@ -229,6 +317,8 @@ function FlowCanvas() {
       setPinnedMessageIds([]);
       setFailedRetry(null);
       setCircularWarning(null);
+      setLinkNotice(null);
+      pendingFocusNodeIdRef.current = null;
       hasInitialLayoutRef.current = false;
       prevMessageCountRef.current = 0;
       prevConversationIdRef.current = currentConversationId;
@@ -275,34 +365,14 @@ function FlowCanvas() {
     [onNodesChange, setNodes, saveNodePositions]
   );
 
-  // Canvas control state - track shift key for horizontal scroll
-  const [panScrollMode, setPanScrollMode] = useState<PanOnScrollMode>(PanOnScrollMode.Vertical);
-  // Invert horizontal scroll only
-  const [panScrollSpeed, setPanScrollSpeed] = useState<number>(1);
-
-  // Handle shift key for horizontal scrolling (with inverted direction)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Shift") {
-        setPanScrollMode(PanOnScrollMode.Horizontal);
-        setPanScrollSpeed(-1); // Invert for horizontal
-      }
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "Shift") {
-        setPanScrollMode(PanOnScrollMode.Vertical);
-        setPanScrollSpeed(1); // Normal for vertical
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("keyup", handleKeyUp);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("keyup", handleKeyUp);
-    };
-  }, []);
+  // Reply and historical-reference edges describe saved conversation state and
+  // must not disappear because somebody pressed Backspace while inspecting the
+  // board. Only deliberate context links are editable.
+  const handleEdgesChange = useCallback((changes: EdgeChange<Edge<FlowEdgeData>>[]) => {
+    onEdgesChange(changes.filter(
+      (change) => change.type !== "remove" || change.id.startsWith("link-"),
+    ));
+  }, [onEdgesChange]);
 
   // Merge database messages with streaming state
   const messages: DisplayMessage[] = useMemo(() => {
@@ -402,6 +472,42 @@ function FlowCanvas() {
         : [...current, nodeId]
     );
   }, []);
+
+  const linkedMessageIds = useMemo(
+    () => replyingTo
+      ? links
+        .filter((link) => link.source_message_id === replyingTo)
+        .map((link) => link.target_message_id)
+      : [],
+    [links, replyingTo],
+  );
+
+  const showLinkNotice = useCallback((message: string) => {
+    setLinkNotice(message);
+    window.setTimeout(() => setLinkNotice(null), 4200);
+  }, []);
+
+  const handleConnect = useCallback((connection: Connection) => {
+    const sourceId = connection.source;
+    const targetId = connection.target;
+    if (!sourceId || !targetId) return;
+    if (sourceId === targetId) {
+      showLinkNotice("A thought cannot link to itself.");
+      return;
+    }
+
+    void createMessageLink(sourceId, targetId)
+      .then(() => showLinkNotice("Context linked. Continue from the source node to include this path in Codex."))
+      .catch((error: unknown) => showLinkNotice(error instanceof Error ? error.message : "Could not save the context link."));
+  }, [createMessageLink, showLinkNotice]);
+
+  const handleEdgesDelete = useCallback((deletedEdges: Edge<FlowEdgeData>[]) => {
+    for (const edge of deletedEdges) {
+      if (edge.data?.edgeType !== "context") continue;
+      void deleteMessageLink(edge.source, edge.target)
+        .catch((error: unknown) => showLinkNotice(error instanceof Error ? error.message : "Could not remove the context link."));
+    }
+  }, [deleteMessageLink, showLinkNotice]);
 
   // Editing a leaf removes its generated subtree and returns the composer to
   // the prior branch point.
@@ -538,6 +644,19 @@ function FlowCanvas() {
       });
     }
 
+    // Context links are intentional, editable connections. They stay distinct
+    // from the historical references that were already sent in an older turn.
+    for (const link of links) {
+      if (!visibleMessageIds.has(link.source_message_id) || !visibleMessageIds.has(link.target_message_id)) continue;
+      newEdges.push({
+        id: `link-${link.source_message_id}-${link.target_message_id}`,
+        source: link.source_message_id,
+        target: link.target_message_id,
+        type: "context",
+        data: { edgeType: "context" },
+      });
+    }
+
     if (needsLayout) {
       // Only layout nodes that don't have saved positions
       const nodesNeedingLayout = newNodes.filter((n) => !nodePositions[n.id]);
@@ -648,6 +767,7 @@ function FlowCanvas() {
     dbMessages,
     messages,
     references,
+    links,
     nodePositions,
     shortLabels,
     treeLabels,
@@ -683,7 +803,7 @@ function FlowCanvas() {
     });
 
     try {
-      await callLLM(
+      const generatedText = await callLLM(
         { endpoint: "/api/codex/generate", body: { messageId: assistantMsg.id, model: selectedModel } },
         (_delta: string, streamedText: string) => {
           setStreamingMessages((prev) => {
@@ -693,6 +813,7 @@ function FlowCanvas() {
           });
         },
       );
+      await updateMessage(assistantMsg.id, generatedText);
       setStreamingMessages((prev) => {
         const next = new Map(prev);
         next.delete(assistantMsg.id);
@@ -711,7 +832,7 @@ function FlowCanvas() {
     } finally {
       setActiveAssistantId(null);
     }
-  }, [addMessage, selectedModel]);
+  }, [addMessage, selectedModel, updateMessage]);
 
   // Handle sending a message
   const handleSend = useCallback(
@@ -821,6 +942,7 @@ function FlowCanvas() {
   const expandedMessage = expandedNodeId ? messagesById.get(expandedNodeId) : null;
 
   const handleFlowInit = useCallback((instance: ReactFlowInstance<Node<FlowNodeData>, Edge<FlowEdgeData>>) => {
+    flowInstanceRef.current = instance;
     if (!viewportStorageKey) return;
     const saved = window.localStorage.getItem(viewportStorageKey);
     if (saved) {
@@ -842,6 +964,49 @@ function FlowCanvas() {
       window.localStorage.setItem(viewportStorageKey, JSON.stringify(viewport));
     }
   }, [viewportStorageKey]);
+
+  const handleOverview = useCallback(() => {
+    void flowInstanceRef.current?.fitView({ padding: 0.18, duration: 240, maxZoom: 1.1 });
+  }, []);
+
+  const handleSearchSelect = useCallback((result: {
+    conversationId: string;
+    messageId?: string;
+  }) => {
+    pendingFocusNodeIdRef.current = result.messageId ?? null;
+    setCurrentConversationId(result.conversationId);
+    setSearchOpen(false);
+  }, []);
+
+  useEffect(() => {
+    const nodeId = pendingFocusNodeIdRef.current;
+    if (!nodeId || !currentConversationId) return;
+    const node = nodes.find((candidate) => candidate.id === nodeId);
+    if (!node) return;
+
+    pendingFocusNodeIdRef.current = null;
+    setNodes((current) => current.map((candidate) => ({
+      ...candidate,
+      selected: candidate.id === nodeId,
+    })));
+    void flowInstanceRef.current?.fitView({ nodes: [node], padding: 0.7, duration: 260, maxZoom: 1.15 });
+  }, [currentConversationId, nodes, setNodes]);
+
+  useEffect(() => {
+    const handleKeyboardShortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen(true);
+      }
+      if (event.key === "0") {
+        event.preventDefault();
+        handleOverview();
+      }
+    };
+    window.addEventListener("keydown", handleKeyboardShortcut);
+    return () => window.removeEventListener("keydown", handleKeyboardShortcut);
+  }, [handleOverview]);
 
   const focusComposer = useCallback((parentId: string | null) => {
     setReplyingTo(parentId);
@@ -955,10 +1120,37 @@ function FlowCanvas() {
           <Plus /> New root
         </Button>
 
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setSearchOpen(true)}
+          className={`fixed top-4 z-50 bg-background/95 shadow-sm backdrop-blur ${showSidebar ? "left-[28rem]" : "left-44"}`}
+          aria-keyshortcuts="Control+K Meta+K"
+        >
+          <Search /> Find
+          <kbd className="hidden rounded border bg-muted px-1 font-mono text-[10px] text-muted-foreground sm:inline">⌘K</kbd>
+        </Button>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleOverview}
+          className="fixed bottom-4 left-4 z-50 bg-background/95 shadow-sm backdrop-blur"
+          aria-keyshortcuts="Control+0 Meta+0"
+        >
+          <MapIcon /> Overview
+        </Button>
+
         {/* Circular warning */}
         {circularWarning && (
           <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-red-100 border border-red-300 rounded-lg text-red-700 text-sm">
             ⚠ {circularWarning}
+          </div>
+        )}
+
+        {linkNotice && (
+          <div className="fixed bottom-5 left-1/2 z-50 max-w-md -translate-x-1/2 rounded-lg border border-teal-200 bg-teal-50 px-4 py-2 text-sm text-teal-900 shadow-sm">
+            {linkNotice}
           </div>
         )}
 
@@ -1011,7 +1203,9 @@ function FlowCanvas() {
             nodes={nodes}
             edges={edges}
             onNodesChange={handleNodesChange}
-            onEdgesChange={onEdgesChange}
+            onEdgesChange={handleEdgesChange}
+            onConnect={handleConnect}
+            onEdgesDelete={handleEdgesDelete}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
             onInit={handleFlowInit}
@@ -1023,11 +1217,11 @@ function FlowCanvas() {
             // Canvas controls:
             // Ctrl + mousewheel = zoom
             zoomOnScroll={false}
-            zoomActivationKeyCode="Control"
-            // Mousewheel = vertical pan (up/down), Shift + mousewheel = horizontal pan (left/right)
+            zoomActivationKeyCode={["Control", "Meta"]}
+            // Trackpad and mouse-wheel movement can pan in both directions.
             panOnScroll={true}
-            panOnScrollMode={panScrollMode}
-            panOnScrollSpeed={panScrollSpeed}
+            panOnScrollMode={PanOnScrollMode.Free}
+            panOnScrollSpeed={1}
             // Left drag = pan canvas
             panOnDrag={true}
             // Ctrl + left drag = selection
@@ -1038,7 +1232,15 @@ function FlowCanvas() {
             zoomOnDoubleClick={false}
           >
             <Background color="#e5e7eb" gap={20} />
-            <Controls className="bg-white! border-gray-200! shadow-sm!" />
+            <Controls position="bottom-left" className="mb-12 bg-white! border-gray-200! shadow-sm!" />
+            <MiniMap
+              position="bottom-right"
+              pannable
+              zoomable
+              nodeColor={(node) => node.type === "agent" ? "#e5e7eb" : "#bfdbfe"}
+              className="!bottom-36 !right-4 !rounded-xl !border !border-gray-200 !bg-white/90 !shadow-sm"
+              maskColor="rgb(249 250 251 / 0.72)"
+            />
           </ReactFlow>
         )}
 
@@ -1091,7 +1293,7 @@ function FlowCanvas() {
                 <div>
                   <h2 className="font-semibold">Connect your own Codex</h2>
                   <p className="mt-1 text-sm leading-5 text-muted-foreground">
-                    Nested uses the Codex CLI session on this computer. Your credentials stay in Codex&apos;s local credential store and are never copied into Nested.
+                    The companion securely connects production Nested to the Codex CLI on your Mac. Your ChatGPT credentials never leave Codex&apos;s local credential store.
                   </p>
                 </div>
                 <Button variant="ghost" size="icon" className="ml-auto shrink-0" onClick={() => setShowCodexSetup(false)} aria-label="Close Codex setup">
@@ -1099,34 +1301,69 @@ function FlowCanvas() {
                 </Button>
               </header>
               <div className="space-y-4 p-5">
-                <div className="rounded-xl border p-4">
-                  <div className="mb-2 flex items-center justify-between gap-3">
+                {pairingStatus?.online && pairingStatus.companion?.authenticated ? (
+                  <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950">
+                    <CheckCircle2 className="mt-0.5 size-5 shrink-0" />
                     <div>
-                      <h3 className="text-sm font-medium">ChatGPT account</h3>
-                      <p className="text-xs text-muted-foreground">Uses your Codex access included with an eligible ChatGPT plan.</p>
+                      <h3 className="text-sm font-medium">Your Codex is connected</h3>
+                      <p className="mt-1 text-xs">{pairingStatus.companion.email ?? "Codex account"} · {pairingStatus.companion.planType ?? "authenticated"}</p>
                     </div>
-                    <Badge>Recommended</Badge>
                   </div>
-                  <code className="block rounded-lg bg-muted px-3 py-2 font-mono text-xs">codex login</code>
-                </div>
-                <div className="rounded-xl border p-4">
-                  <h3 className="text-sm font-medium">Headless or remote computer</h3>
-                  <p className="mb-2 text-xs text-muted-foreground">Use device-code authentication when the normal browser callback is unavailable.</p>
-                  <code className="block rounded-lg bg-muted px-3 py-2 font-mono text-xs">codex login --device-auth</code>
-                </div>
-                <div className="rounded-xl border p-4">
-                  <h3 className="text-sm font-medium">OpenAI API account</h3>
-                  <p className="mb-2 text-xs text-muted-foreground">Uses usage-based API billing. Keep the key in your shell—never paste it into Nested.</p>
-                  <code className="block overflow-x-auto rounded-lg bg-muted px-3 py-2 font-mono text-xs">printenv OPENAI_API_KEY | codex login --with-api-key</code>
-                </div>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  Run one command in a terminal on the same computer as Nested. Then return here and refresh the connection.
-                </p>
+                ) : (
+                  <>
+                    <div className="rounded-xl border p-4">
+                      <div className="mb-2 flex items-center gap-2">
+                        <Badge variant="secondary">1</Badge>
+                        <h3 className="text-sm font-medium">Confirm Codex is signed in</h3>
+                      </div>
+                      <code className="block rounded-lg bg-muted px-3 py-2 font-mono text-xs">codex login</code>
+                      <p className="mt-2 text-xs text-muted-foreground">You can skip this if Codex already says you are logged in.</p>
+                    </div>
+                    <div className="rounded-xl border p-4">
+                      <div className="mb-2 flex items-center gap-2">
+                        <Badge variant="secondary">2</Badge>
+                        <h3 className="text-sm font-medium">Start the Nested companion</h3>
+                      </div>
+                      {pairingToken ? (
+                        <>
+                          <p className="mb-2 text-xs text-muted-foreground">First copy this one-time token:</p>
+                          <div className="relative rounded-lg bg-muted p-3 pr-11">
+                            <code className="block overflow-x-auto whitespace-pre-wrap break-all font-mono text-xs">{pairingToken}</code>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="absolute right-1.5 top-1.5"
+                              onClick={() => {
+                                void navigator.clipboard.writeText(pairingToken);
+                                setPairingCopied(true);
+                                window.setTimeout(() => setPairingCopied(false), 1500);
+                              }}
+                              aria-label="Copy pairing token"
+                            >
+                              {pairingCopied ? <CheckCircle2 /> : <Clipboard />}
+                            </Button>
+                          </div>
+                          <p className="mb-2 mt-3 text-xs text-muted-foreground">Then run this from the Nested project folder and paste the token at the hidden prompt:</p>
+                          <code className="block overflow-x-auto whitespace-pre-wrap rounded-lg bg-muted px-3 py-2 font-mono text-xs">{pairingCommand}</code>
+                          <p className="mt-2 text-xs leading-5 text-muted-foreground">The token never enters shell history or process arguments. It is saved locally with owner-only permissions; rotating it revokes the old one.</p>
+                        </>
+                      ) : (
+                        <Button onClick={() => void createPairingToken()} disabled={pairingLoading}>
+                          {pairingLoading ? <RefreshCw className="animate-spin" /> : <Terminal />}
+                          {pairingStatus?.paired ? "Rotate token and show command" : "Create pairing command"}
+                        </Button>
+                      )}
+                    </div>
+                    {pairingStatus?.paired && !pairingStatus.online && (
+                      <p className="text-xs text-muted-foreground">A Mac is paired but offline. Start the companion, or rotate the token if you no longer have it.</p>
+                    )}
+                  </>
+                )}
               </div>
               <footer className="flex justify-end gap-2 border-t px-5 py-3">
-                <Button variant="ghost" onClick={() => setShowCodexSetup(false)}>Not now</Button>
-                <Button onClick={() => { void refreshCodexStatus(true); setShowCodexSetup(false); }}>
-                  <RefreshCw /> I&apos;ve connected Codex
+                <Button variant="ghost" onClick={() => setShowCodexSetup(false)}>Close</Button>
+                <Button onClick={() => void Promise.all([refreshPairingStatus(), refreshCodexStatus(true)])}>
+                  <RefreshCw className={statusLoading ? "animate-spin" : ""} /> Check connection
                 </Button>
               </footer>
             </section>
@@ -1142,11 +1379,18 @@ function FlowCanvas() {
             treeLabels={treeLabels}
             replyingTo={replyingTo}
             pinnedMessageIds={pinnedMessageIds}
+            linkedMessageIds={linkedMessageIds}
             onTogglePin={handleToggleContextPin}
             onCancelReply={() => setReplyingTo(null)}
             disabled={isLoading || !codexStatus?.authenticated || !selectedModel}
           />
         )}
+
+        <SearchThoughts
+          open={searchOpen}
+          onOpenChange={setSearchOpen}
+          onSelect={handleSearchSelect}
+        />
       </div>
     </div>
   );
@@ -1154,8 +1398,10 @@ function FlowCanvas() {
 
 export default function FlowPage() {
   if (
-    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    process.env.NEXT_PUBLIC_NESTED_LOCAL_MODE !== "1" && (
+      !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+      !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    )
   ) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-muted/40 p-6">

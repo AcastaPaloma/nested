@@ -13,7 +13,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import "katex/dist/katex.min.css";
+import { normalizeMathDelimiters } from "@/lib/markdown/normalize-math";
 import {
   ChevronDown,
   ChevronRight,
@@ -89,7 +89,7 @@ export function MarkdownContent({ content }: { content: string }) {
           ),
         }}
       >
-        {content}
+        {normalizeMathDelimiters(content)}
       </ReactMarkdown>
     </div>
   );
@@ -284,15 +284,14 @@ export const UserNode = memo(function UserNode({
         />
       )}
 
-      {/* Target handle - top (not shown on root) */}
-      {!isRoot && (
-        <Handle
-          type="target"
-          position={Position.Top}
-          style={{ background: palette.handle }}
-          className="w-3! h-3! border-2! border-white!"
-        />
-      )}
+      {/* Every thought can receive an intentional context link, including roots. */}
+      <Handle
+        type="target"
+        position={Position.Top}
+        style={{ background: palette.handle }}
+        className="w-3! h-3! border-2! border-white!"
+        title="Drop a context link here"
+      />
 
       {/* Header */}
       <div
@@ -343,7 +342,7 @@ export const UserNode = memo(function UserNode({
       {isCollapsed ? (
         <CollapsedContent content={message.content} palette={palette} />
       ) : (
-        <div className="px-3 py-2 overflow-hidden flex-1 min-h-0">
+        <div className="nowheel px-3 py-2 overflow-y-auto flex-1 min-h-0">
           <MarkdownContent content={message.content} />
           {message.branchReferences.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
@@ -539,7 +538,7 @@ export const AgentNode = memo(function AgentNode({
       {isCollapsed ? (
         <CollapsedContent content={message.content} palette={palette} />
       ) : (
-        <div className="px-3 py-2 overflow-hidden flex-1 min-h-0">
+        <div className="nowheel px-3 py-2 overflow-y-auto flex-1 min-h-0">
           <MarkdownContent content={message.content} />
         </div>
       )}

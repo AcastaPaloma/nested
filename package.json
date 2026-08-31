@@ -13,10 +13,14 @@
   "homepage": "https://github.com/AcastaPaloma/nested#readme",
   "scripts": {
     "dev": "next dev",
+    "local": "tsx scripts/local.ts",
+    "local:dev": "tsx scripts/local.ts --dev",
     "build": "next build",
+    "companion": "tsx companion/cli.ts",
+    "companion:install": "tsx companion/install.ts",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --test app/flow/context.test.ts lib/codex/*.test.ts"
+    "test": "tsx --test app/flow/context.test.ts lib/codex/*.test.ts lib/companion/*.test.ts lib/markdown/*.test.ts"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.8",
